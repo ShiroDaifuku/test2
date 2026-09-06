@@ -1,0 +1,73 @@
+name: Windows 桌面版构建
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    env:
+      CI: "true"
+      pnpm_config_verify_deps_before_run: "false"
+      pnpm_config_confirm_modules_purge: "false"
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: "s"
+      CARGO_PROFILE_RELEASE_STRIP: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: 拉取 LFS 资源（图标 + 前端资源）
+        # 镜像仓内 icons/public/src-assets 是 LFS 指针，从上游公开仓拉真实文件，
+        # 否则 vite/tauri icon 会把指针文本打进去导致资源缺失。
+        shell: bash
+        run: |
+          git lfs install --local
+          git remote add upstream https://github.com/SlimeBoyOwO/LingChat.git || true
+          git lfs fetch --include="src-tauri/icons/**,public/**,src/assets/**" upstream main
+          git lfs checkout
+
+      - uses: pnpm/setup@v1
+        with:
+          runtime: node@26
+          cache: true
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: 设置 rust 缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          save-if: "true"
+
+      - name: 初始化（图标 + 资源）
+        run: |
+          pnpm install
+          pnpm run init
+
+      - name: 构建桌面版（release，不打包安装器）
+        run: pnpm tauri build --no-bundle
+
+      - name: 收集产物
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force staging | Out-Null
+          Copy-Item src-tauri\target\release\ling_chat.exe staging\ -ErrorAction SilentlyContinue
+          Copy-Item src-tauri\target\release\WebView2Loader.dll staging\ -ErrorAction SilentlyContinue
+          Get-ChildItem staging | Select-Object Name, Length
+          if (-not (Test-Path staging\ling_chat.exe)) { throw "ling_chat.exe not found" }
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: lingchat-desktop-win
+          path: staging/*
+          retention-days: 7

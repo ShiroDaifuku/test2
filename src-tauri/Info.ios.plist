@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+		iOS 专属 Info.plist 合并片段。
+
+		由 `tauri ios build` 在每次构建时自动与 XcodeGen 生成的 Info.plist
+		合并（见 tauri-cli mobile/ios/build.rs 的 Info.plist merge 逻辑，
+		该文件与 src-tauri/Info.plist 同级，属 iOS 专属钩子），
+		因此这里声明的键会稳定生效，不依赖 gen/apple 工程的重新生成。
+	-->
+
+	<!-- 文件 App 可见应用数据目录（配合 Rust 侧 data 目录定位到 Documents） -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+
+	<!--
+		设备族（iPhone/iPad）不在这里声明：UIDeviceFamily 是派生子键，
+		tauri-cli 合并 Info.plist 时以 TARGETED_DEVICE_FAMILY build setting
+		为准并覆盖此处声明（xcodebuild 会对此输出警告）。设备族统一由
+		scripts/configure-ios-project.sh 归一化 TARGETED_DEVICE_FAMILY = "1,2"。
+	-->
+
+	<!-- ─── iOS 隐私权限声明 ───────────────────────────────── -->
+	<!-- 语音输入（ASR 按住说话 / 语音对话）：iOS 缺此键时访问麦克风会崩溃 -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>用于语音输入和语音对话（识别你说的话并发送给 AI 助手）。</string>
+
+	<!-- 拍照：移动端「截图/图片」流程的拍照来源 -->
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍照并把图片发送给 AI 助手。</string>
+
+	<!-- 相册选图：移动端「截图/图片」流程的相册来源、导入图片 -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于从相册选择图片发送给 AI 助手。</string>
+
+	<!-- 保存图片到相册（导出立绘 / 生成图片等） -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>用于把生成的图片保存到你的相册。</string>
+
+	<!-- 局域网发现电脑端 LingChat（LAN 同步 / 手机连电脑，iOS 14+ 必需） -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>用于发现并连接同一局域网内的电脑端 LingChat 进行数据同步。</string>
+
+	<!-- Bonjour/mDNS 服务类型声明：iOS 14+ 浏览/广播自定义服务必须显式声明，
+	     否则 mDNS 查询会被系统静默拦截，手机搜不到电脑 -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_lingchat-sync._tcp</string>
+	</array>
+</dict>
+</plist>
