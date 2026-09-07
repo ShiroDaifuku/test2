@@ -140,6 +140,11 @@ tauri-plugin-ios-webview-insets = "0.1"
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = "0.3"
+# 情绪分类器在 iOS 走 Apple CoreML EP；之前只落在通用 download-binaries，
+# iOS 没有对应预编译运行时导致 ONNX 模型加载失败、情绪回退为原样长标签。
+ort = { version = "=2.0.0-rc.13", default-features = false, features = [
+    "coreml",
+] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 ort = { version = "=2.0.0-rc.13", default-features = false, features = [
