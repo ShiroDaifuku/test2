@@ -328,6 +328,8 @@
     background-position: center center;
     background-attachment: fixed;
     background-repeat: no-repeat;
-    z-index: -2;
+    /* iOS 移动端 body 有深色底（#0b0f14），负 z-index 会被 body 背景盖住，
+       导致场景背景不显示；提到 0 后位于 body 背景之上、角色立绘之下。 */
+    z-index: 0;
   }
 </style>
