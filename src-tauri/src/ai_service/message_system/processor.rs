@@ -70,6 +70,86 @@ fn strip_jp_action_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"<[^>]*>|（[^）]*）").expect("invalid regex"))
 }
 
+/// 把模型输出的【情绪】标签规整为前端已知的短情绪词。
+///
+/// iOS 上 ort/ONNX 情绪分类器可能不可用（见 Cargo.toml 的 iOS 依赖缺失），
+/// 分类器禁用时 predicted 会回退为原始标签，导致情绪变成模型随手写的一整段
+/// （如“我高兴的走过来”）。这里做白名单兜底，保证情绪永远是短标签。
+fn normalize_emotion_tag(raw: &str) -> String {
+    // 去空白与常见标点，仅保留可用于关键词匹配的文本
+    let t: String = raw
+        .chars()
+        .filter(|c| {
+            !c.is_whitespace()
+                && !matches!(
+                    c,
+                    '【' | '】' | '，' | ',' | '。' | '.' | '！' | '!' | '？' | '?' | '…' | '~' | '～'
+                )
+        })
+        .collect();
+    let t = t.trim();
+    if t.is_empty() {
+        return "正常".to_string();
+    }
+
+    // 顺序重要：更具体的放前面；命中即返回。输出必须落在前端
+    // EMOTION_CONFIG_EMO 的已知键里（避免出现前端无法映射的情绪）。
+    const MAP: &[(&str, &str)] = &[
+        ("厌恶", "厌恶"),
+        ("嫌弃", "厌恶"),
+        ("讨厌", "厌恶"),
+        ("生气", "生气"),
+        ("愤怒", "生气"),
+        ("气恼", "生气"),
+        ("难过", "伤心"),
+        ("悲伤", "伤心"),
+        ("流泪", "伤心"),
+        ("哭泣", "哭泣"),
+        ("伤心", "伤心"),
+        ("害怕", "害怕"),
+        ("恐惧", "害怕"),
+        ("惊恐", "害怕"),
+        ("难为情", "难为情"),
+        ("害羞", "害羞"),
+        ("羞涩", "害羞"),
+        ("惊讶", "惊讶"),
+        ("吃惊", "惊讶"),
+        ("震惊", "惊讶"),
+        ("紧张", "紧张"),
+        ("担忧", "担心"),
+        ("担心", "担心"),
+        ("困惑", "疑惑"),
+        ("疑问", "疑惑"),
+        ("疑惑", "疑惑"),
+        ("无语", "无语"),
+        ("认真", "认真"),
+        ("自信", "自信"),
+        ("撒娇", "调皮"),
+        ("调皮", "调皮"),
+        ("慌乱", "慌张"),
+        ("慌张", "慌张"),
+        ("尴尬", "尴尬"),
+        ("开心", "高兴"),
+        ("愉快", "高兴"),
+        ("喜悦", "高兴"),
+        ("高兴", "高兴"),
+        ("兴奋", "兴奋"),
+        ("情动", "心动"),
+        ("心动", "心动"),
+        ("无奈", "无奈"),
+        ("平静", "平静"),
+        ("正常", "正常"),
+    ];
+
+    for (keyword, canonical) in MAP {
+        if t.contains(keyword) {
+            return canonical.to_string();
+        }
+    }
+
+    "正常".to_string()
+}
+
 /// MessageProcessor 配置。
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessorOptions {
@@ -123,7 +203,8 @@ impl MessageProcessor {
 
         for cap in re.captures_iter(&text) {
             i += 1;
-            let emotion_tag = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+            let raw_emotion = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+            let emotion_tag = normalize_emotion_tag(raw_emotion);
             let following_raw = cap.get(2).map(|m| m.as_str()).unwrap_or("");
             let following_text = following_raw.replace('(', "（").replace(')', "）");
 
@@ -356,7 +437,8 @@ pub fn fix_ai_generated_text(text: &str) -> String {
     let mut has_any = false;
     for cap in re.captures_iter(&text) {
         has_any = true;
-        let emotion_tag = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let raw_emotion = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let emotion_tag = normalize_emotion_tag(raw_emotion);
         let full_tag = format!("【{emotion_tag}】");
         let following_raw = cap.get(2).map(|m| m.as_str()).unwrap_or("");
         let following_text = following_raw.replace('(', "（").replace(')', "）");
