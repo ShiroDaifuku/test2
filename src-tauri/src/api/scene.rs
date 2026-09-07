@@ -106,6 +106,84 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+/// 首启（scenes.json 尚不存在/为空）时，扫描内置背景目录 `game_data/backgrounds/`，
+/// 把内置背景注册为场景并落盘，返回一个默认场景 id（优先 `白天.webp`，否则目录第一个）。
+/// 用于让全新安装第一次打开也有背景，而不是等用户手动进一次背景设置页。
+pub(crate) fn ensure_builtin_scenes(data_dir: &std::path::Path) -> Option<String> {
+    let store = SceneStore::new(data_dir);
+    let mut scenes = store.load_all().unwrap_or_default();
+
+    let bg_dir = data_dir.join("game_data").join("backgrounds");
+    let allowed = ["png", "jpg", "jpeg", "webp", "bmp", "svg", "tif", "gif"];
+
+    let existing: HashSet<String> = scenes
+        .iter()
+        .map(|s| to_background_filename(&s.background))
+        .filter(|b| !b.is_empty())
+        .collect();
+
+    let mut added = false;
+    let mut first_id: Option<String> = None;
+    let mut day_id: Option<String> = None;
+
+    if bg_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&bg_dir) {
+            let mut files: Vec<_> = entries.flatten().filter(|e| e.path().is_file()).collect();
+            // 稳定排序，保证“目录第一个”可复现
+            files.sort_by_key(|e| e.file_name());
+
+            for entry in files {
+                let path = entry.path();
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if !allowed.contains(&ext.as_str()) {
+                    continue;
+                }
+                let file_name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if existing.contains(&file_name) {
+                    continue;
+                }
+                let name = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let id = Uuid::new_v4().to_string();
+                let now = now_iso();
+                scenes.push(Scene {
+                    id: id.clone(),
+                    name,
+                    description: String::new(),
+                    background: file_name.clone(),
+                    lighting: None,
+                    created_at: now.clone(),
+                    updated_at: now,
+                    plugin_id: None,
+                });
+                existing.insert(file_name.clone());
+                added = true;
+                if first_id.is_none() {
+                    first_id = Some(id.clone());
+                }
+                if file_name == "白天.webp" {
+                    day_id = Some(id.clone());
+                }
+            }
+        }
+    }
+
+    if added {
+        let _ = store.save_all(&scenes);
+    }
+
+    day_id.or(first_id)
+}
+
 // ========== Tauri commands ==========
 
 #[tauri::command]
