@@ -1,30 +1,32 @@
 <template>
   <div class="relative h-full w-full">
-    <!-- 底层图片（当前显示） -->
+    <!-- 底层图片（当前显示的图片） -->
     <slot></slot>
-    <img
-      v-if="currentImageUrl"
-      class="absolute inset-0 z-10 h-full w-full select-none"
-      :style="makeStyle()"
-      :src="currentImageUrl"
-      alt=""
-      draggable="false"
-    />
+    <div
+      class="absolute inset-0 z-10 h-full w-full bg-no-repeat will-change-[opacity,background-image]
+        backface-hidden"
+      :style="{
+        backgroundImage: `url(${currentImageUrl})`,
+        backgroundSize: objectFit,
+        backgroundPosition: position,
+      }"
+    ></div>
 
-    <!-- 顶层图片（准备淡入的新图片）。
-         用 <img> 而不是 CSS background-image：
-         iOS WKWebView 对自定义 scheme（asset://…）的 CSS url() 不一定触发 scheme handler，
-         导致背景永远空白；而角色立绘用 <img> 走同一 scheme 已实测正常。 -->
-    <img
+    <!-- 顶层图片（准备淡入的新图片） -->
+    <!-- 新增 ref="topDivRef" 用于强制重排 -->
+    <div
       ref="topDivRef"
-      class="absolute inset-0 z-20 h-full w-full select-none transition-opacity ease-in-out"
+      class="absolute inset-0 z-20 h-full w-full bg-no-repeat transition-opacity ease-in-out
+        will-change-[opacity,background-image] backface-hidden"
       :class="isFadingIn ? 'opacity-100' : 'opacity-0'"
-      :style="makeStyle({ transitionDuration: `${duration}ms` })"
-      :src="nextImageUrl || undefined"
-      alt=""
-      draggable="false"
+      :style="{
+        backgroundImage: `url(${nextImageUrl})`,
+        backgroundSize: objectFit,
+        backgroundPosition: position,
+        transitionDuration: `${duration}ms`,
+      }"
       @transitionend="onTransitionEnd"
-    />
+    ></div>
   </div>
 </template>
 
@@ -45,17 +47,10 @@
     }
   );
 
-  const topDivRef = ref<HTMLElement | null>(null); // 顶层 <img> 的引用（用于强制重排）
+  const topDivRef = ref<HTMLElement | null>(null); // 获取顶层 DOM 的引用
   const currentImageUrl = ref("");
   const nextImageUrl = ref("");
   const isFadingIn = ref(false);
-
-  /** 组装 <img> 的 object-fit / object-position 内联样式（返回 any 以通过模板类型检查） */
-  const makeStyle = (extra?: Record<string, string>): any => ({
-    objectFit: props.objectFit,
-    objectPosition: props.position,
-    ...(extra || {}),
-  });
 
   let currentImageLoadPromise: Promise<void> | null = null;
 
@@ -68,8 +63,7 @@
     });
     currentImageLoadPromise = loadPromise;
 
-    // 预加载：加载成功才淡入，失败不覆盖当前图（避免 <img> 显示破图）
-    let loaded = false;
+    // 1. 完善的图片预加载机制
     const img = new Image();
     const imgReadyPromise = new Promise<void>((resolve, reject) => {
       img.onload = () => resolve();
@@ -78,16 +72,12 @@
     img.src = newUrl;
 
     try {
+      // 必须先等网络请求完全结束
       await imgReadyPromise;
+      // 然后再等 CPU 解码完成 (忽略 decode 本身不支持时的报错)
       await img.decode().catch(() => {});
-      loaded = true;
     } catch (err) {
       console.error(`加载图片失败: ${newUrl}`, err);
-    }
-
-    if (!loaded) {
-      resolveLoad();
-      return;
     }
 
     // 确保只有最后一次触发的加载才会执行 DOM 更新
@@ -98,18 +88,18 @@
         isFadingIn.value = false;
       }
 
-      // 赋值新图
+      // 2. 赋值新的背景图
       nextImageUrl.value = newUrl;
 
-      // 等待 Vue 更新 DOM
+      // 3. 关键：等待 Vue 将 URL 更新到真实 DOM (style属性中)
       await nextTick();
 
-      // 强制浏览器重排 (Reflow)
+      // 4. 关键：强制浏览器重排 (Reflow)
       if (topDivRef.value) {
         void topDivRef.value.offsetHeight;
       }
 
-      // 下一帧开启淡入
+      // 5. 在下一帧安全地开启淡入动画
       requestAnimationFrame(() => {
         isFadingIn.value = true;
       });
