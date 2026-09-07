@@ -116,7 +116,7 @@ pub(crate) fn ensure_builtin_scenes(data_dir: &std::path::Path) -> Option<String
     let bg_dir = data_dir.join("game_data").join("backgrounds");
     let allowed = ["png", "jpg", "jpeg", "webp", "bmp", "svg", "tif", "gif"];
 
-    let existing: HashSet<String> = scenes
+    let mut existing: HashSet<String> = scenes
         .iter()
         .map(|s| to_background_filename(&s.background))
         .filter(|b| !b.is_empty())
