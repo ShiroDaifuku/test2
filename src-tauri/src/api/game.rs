@@ -484,13 +484,19 @@ pub(crate) async fn build_web_init_data(
             }
         }
 
-        // 若仍无场景，随机选一个
+        // 若仍无场景：首启时扫描内置背景目录注册并选默认（白天.webp 优先）；
+        // 已注册过则退回随机选一个。
         if sid.is_none() {
-            let store = SceneStore::new(&service.data_dir);
-            if let Ok(scenes) = store.load_all() {
-                if !scenes.is_empty() {
-                    let idx = chrono::Utc::now().timestamp_subsec_nanos() as usize % scenes.len();
-                    sid = Some(scenes[idx].id.clone());
+            if let Some(default_id) = super::scene::ensure_builtin_scenes(&service.data_dir) {
+                tracing::info!("首启默认场景已选择: {default_id}");
+                sid = Some(default_id);
+            } else {
+                let store = SceneStore::new(&service.data_dir);
+                if let Ok(scenes) = store.load_all() {
+                    if !scenes.is_empty() {
+                        let idx = chrono::Utc::now().timestamp_subsec_nanos() as usize % scenes.len();
+                        sid = Some(scenes[idx].id.clone());
+                    }
                 }
             }
         }
