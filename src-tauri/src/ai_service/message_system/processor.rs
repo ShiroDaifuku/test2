@@ -246,7 +246,7 @@ impl MessageProcessor {
             // 情绪分类器：有分类器走 ONNX，否则回退为原 tag。
             let (predicted, confidence) = match self.classifier.as_ref() {
                 Some(clf) => {
-                    let p = clf.predict(emotion_tag, None);
+                    let p = clf.predict(&emotion_tag, None);
                     (p.label, p.confidence as f64)
                 },
                 None => (emotion_tag.to_string(), 1.0),
