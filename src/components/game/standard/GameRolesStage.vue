@@ -1,34 +1,22 @@
 <template>
   <div class="absolute h-full w-full overflow-hidden">
-    <!-- 1. 所有 Live2D 角色共享一个场景级 Pixi Application -->
-    <Live2DStage
-      class="z-2"
-      :roles="gameStore.presentRolesList"
-      mode="standard"
-      :active-speaker-id="gameStore.currentInteractRoleId"
-      :audio-element="mainAudio"
-      :voice-data-url="voiceDataUrl"
+    <!-- 1. 每个角色保留原有静态视觉、气泡和触摸层 -->
+    <RoleAvatar
+      v-for="role in gameStore.presentRolesList"
+      :key="role.roleId"
+      :role="role"
       :cast-scale="castScale"
       :cast-offset-y="castOffsetY"
-    >
-      <!-- 2. 每个角色保留原有静态视觉、气泡和触摸层 -->
-      <RoleAvatar
-        v-for="role in gameStore.presentRolesList"
-        :key="role.roleId"
-        :role="role"
-        :cast-scale="castScale"
-        :cast-offset-y="castOffsetY"
-      />
-    </Live2DStage>
+    />
 
-    <!-- 3. 场景光照叠加层 -->
+    <!-- 2. 场景光照叠加层 -->
     <div
       v-if="lightOverlayStyle"
       class="pointer-events-none absolute inset-0 z-10"
       :style="lightOverlayStyle as any"
     ></div>
 
-    <!-- 4. 全局主语音播放器 -->
+    <!-- 3. 全局主语音播放器 -->
     <audio ref="mainAudio" @ended="onAudioEnded"></audio>
   </div>
 </template>
@@ -38,9 +26,7 @@
   import { useGameStore } from "@/stores/modules/game";
   import { useUIStore } from "@/stores/modules/ui/ui";
   import { getVoiceAudio } from "@/api/services/game-info";
-  import { setVoicePlaying } from "@/composables/useAsrInput";
   import RoleAvatar from "./GameRoleAvatar.vue";
-  import Live2DStage from "../live2d/Live2DStage.vue";
 
   const gameStore = useGameStore();
   const uiStore = useUIStore();
@@ -50,7 +36,7 @@
     水平偏移由投屏窗口 .cast-role-layer 的 CSS translateX 整层平移，不在此处理。 */
   const props = withDefaults(
     defineProps<{
-      /** 投屏全局缩放（作用于 Live2D / 立绘布局，保持贴底定位） */
+      /** 投屏全局缩放（作用于立绘布局，保持贴底定位） */
       castScale?: number;
       /** 投屏全局垂直偏移（像素，正值下移；布局内夹紧，下移触底即止） */
       castOffsetY?: number;
@@ -81,7 +67,6 @@
         voiceDataUrl.value = "";
         mainAudio.value.pause();
         mainAudio.value.currentTime = 0;
-        setVoicePlaying(false);
         return;
       }
 
@@ -92,16 +77,13 @@
           mainAudio.value.src = dataUrl;
           mainAudio.value.load();
           mainAudio.value.volume = uiStore.characterVolume / 100;
-          // TTS 播放中 ASR 禁用（外放 TTS 进麦克风会误识别 AI 自己的话）
           mainAudio.value
             .play()
             .then(() => {
-              setVoicePlaying(true);
               emit("audio-started");
             })
             .catch((e) => {
               console.error("播放失败", e);
-              setVoicePlaying(false);
             });
         } catch (e) {
           console.error("获取语音文件失败:", e);
@@ -118,7 +100,6 @@
   );
 
   const onAudioEnded = () => {
-    setVoicePlaying(false);
     emit("audio-ended");
   };
 
@@ -127,7 +108,6 @@
     if (mainAudio.value) {
       mainAudio.value.pause();
       mainAudio.value.currentTime = 0;
-      setVoicePlaying(false);
     }
   };
 

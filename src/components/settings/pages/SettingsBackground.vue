@@ -75,11 +75,6 @@
           >
             <Wrench :size="16" />
           </button>
-          <PluginTag
-            v-if="scene.source && scene.source !== 'game'"
-            :source="scene.source"
-            class="absolute top-2 left-2 z-10"
-          />
 
           <!-- 背景预览 -->
           <div
@@ -510,7 +505,6 @@
     generateBackgroundImage,
     openBackgroundsFolder,
   } from "../../../api/services/background";
-  import { unlockAchievement } from "../../../api/services/achievement";
   import {
     getCpuInfo,
     redetectCpu,
@@ -530,7 +524,6 @@
   import { Image, PictureInPicture, Sparkles, Settings, Wand2, Wrench, Cpu } from "lucide-vue-next";
   import SceneEditModal from "../scene/SceneEditModal.vue";
   import DialogAppearancePanel from "../dialog/DialogAppearancePanel.vue";
-  import PluginTag from "@/components/ui/PluginTag.vue";
   import { useUserStore } from "../../../stores/modules/user/user";
 
   const gameStore = useGameStore();
@@ -674,7 +667,6 @@
     if (gameStore.currentScene?.id === scene.id) {
       gameStore.clearCurrentScene();
       uiStore.setCurrentBackground("");
-      unlockAchievement("see_through").catch(console.error);
       await fetchScenes();
       return;
     }

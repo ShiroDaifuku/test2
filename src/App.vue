@@ -9,8 +9,6 @@
   <!-- 与桌宠专用通知组件区分开 -->
   <!-- 弹窗类组件仅主窗口挂载：日志等独立窗口复用 App.vue，不重复弹出 -->
   <Notification v-if="isMainWindow && route.path !== '/pet'" />
-  <AchievementToast v-if="isMainWindow" />
-  <AdventureUnlockNotify v-if="isMainWindow" />
   <AppDialog v-if="isMainWindow" />
 </template>
 
@@ -22,21 +20,15 @@
   import { invoke } from "@tauri-apps/api/core";
   import CursorEffects from "./components/effects/CursorEffects.vue";
   import Notification from "./components/ui/Notification.vue";
-  import AchievementToast from "./components/ui/AchievementToast.vue";
-  import AdventureUnlockNotify from "./components/ui/AdventureUnlockNotify.vue";
   import AppDialog from "./components/ui/AppDialog.vue";
   import { initUIStore, useUIStore } from "./stores/modules/ui/ui";
   import { useGameStore } from "./stores/modules/game";
   import { i18n } from "./locales";
   import { useSettingsStore } from "./stores/modules/settings";
   import { useLlmProvidersStore } from "./stores/modules/llm-providers";
-  import { useAchievementStore } from "./stores/modules/ui/achievement";
   import { useDialogStore } from "./stores/modules/ui/dialog";
-  import { useSedentaryReminder } from "./composables/useSedentaryReminder";
-  import { useUpdater } from "./composables/useUpdater";
   import { useCanDeliver } from "./composables/useCanDeliver";
   import { useZoom } from "./composables/useZoom";
-  import { useAsrInput } from "./composables/useAsrInput";
   import { listSystemFonts, getImportedFonts, registerAllImportedFonts } from "./api/services/font";
   import { isMobile } from "./utils/platform";
 
@@ -45,9 +37,6 @@
 
   // 激活 Ctrl+滚轮 UI 全局缩放
   useZoom();
-
-  // ─── 久坐提醒 ────────────────────────────────────────────────
-  useSedentaryReminder();
 
   // ─── 全局字体 ────────────────────────────────────────────────
   // 把设置中的自定义字体名同步到 <html> 的 --font-app；
@@ -258,13 +247,6 @@
   // 仅主窗口挂载全局弹窗（通知/成就/对话确认），日志窗口等复用 App.vue 的窗口不弹
   const isMainWindow = getCurrentWindow().label === "main";
 
-  // ASR 全局初始化（仅主窗口一次）：auto_listen 能量监测门控 + 事件监听。
-  // useAsrInput 状态是模块级单例，GameDialog / ChatInput（桌宠）的 mic 按钮
-  // 与这里共享同一会话。
-  if (isMainWindow) {
-    useAsrInput();
-  }
-
   const handleKeyDown = async (event: KeyboardEvent) => {
     if (event.key === "F11") {
       event.preventDefault();
@@ -314,14 +296,6 @@
     // 预加载 LLM 提供商配置，避免主界面因 store 未加载而误判未选择模型
     const llmStore = useLlmProvidersStore();
     llmStore.load().catch((e) => console.error("加载 LLM 提供商失败:", e));
-
-    // 供成就系统控制台测试用，在 window 对象中注册一些方法
-    const achievementStore = useAchievementStore();
-    (window as any).requestAchievementUnlock = (data: any) =>
-      achievementStore.notifyBackendUnlock(data);
-    (window as any).showAchievement = (data: any) => achievementStore.addAchievement(data);
-    // 成就系统启动WebSocket监听
-    achievementStore.listenForUnlocks();
 
     // 注册 F11 全屏快捷键
     window.addEventListener("keydown", handleKeyDown);

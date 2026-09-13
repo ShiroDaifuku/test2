@@ -15,34 +15,6 @@
       </MenuItem>
     </div>
 
-    <!-- 本地 TTS -->
-    <div class="h-full cursor-pointer transition-all duration-300" @click="emit('navigate', 'tts')">
-      <MenuItem :title="$t('advance.menu.ttsTitle')" size="large">
-        <template #header>
-          <AudioLines :size="20" />
-        </template>
-        <p class="mb-3 min-h-[68px] text-sm leading-relaxed text-white/50">
-          {{ $t("advance.menu.ttsDesc") }}
-        </p>
-        <Button type="big" icon="mic" :icon_size="18"> {{ $t("advance.menu.ttsButton") }} </Button>
-      </MenuItem>
-    </div>
-
-    <!-- 语音识别 -->
-    <div class="h-full cursor-pointer transition-all duration-300" @click="emit('navigate', 'asr')">
-      <MenuItem :title="$t('advance.menu.asrTitle')" size="large">
-        <template #header>
-          <Mic :size="20" />
-        </template>
-        <p class="mb-3 min-h-[68px] text-sm leading-relaxed text-white/50">
-          {{ $t("advance.menu.asrDesc") }}
-        </p>
-        <Button type="big" icon="mic" :icon_size="18">
-          {{ $t("advance.menu.asrButton") }}
-        </Button>
-      </MenuItem>
-    </div>
-
     <!-- 其他高级设置 -->
     <div
       class="h-full cursor-pointer transition-all duration-300"
@@ -75,24 +47,6 @@
         </p>
         <Button type="big" icon="setting" :icon_size="18">
           {{ $t("advance.menu.toolsButton") }}
-        </Button>
-      </MenuItem>
-    </div>
-
-    <!-- 投屏设置 -->
-    <div
-      class="h-full cursor-pointer transition-all duration-300"
-      @click="emit('navigate', 'cast')"
-    >
-      <MenuItem :title="$t('advance.menu.castTitle')" size="large">
-        <template #header>
-          <Cast :size="20" />
-        </template>
-        <p class="mb-3 min-h-[68px] text-sm leading-relaxed text-white/50">
-          {{ $t("advance.menu.castDesc") }}
-        </p>
-        <Button type="big" icon="advance" :icon_size="18">
-          {{ $t("advance.menu.castButton") }}
         </Button>
       </MenuItem>
     </div>
@@ -162,7 +116,7 @@
   const { locale } = useI18n();
 
   const emit = defineEmits<{
-    navigate: [tab: "llm" | "tts" | "asr" | "other" | "tools" | "cast"];
+    navigate: [tab: "llm" | "other" | "tools"];
   }>();
 
   // 内置 TTS 官方教程（LingBlog）

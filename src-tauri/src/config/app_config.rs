@@ -117,6 +117,24 @@ pub struct AppConfig {
     /// TTS 引擎配置（适配器 URL、音频格式等）
     #[serde(default)]
     pub tts: TtsConfig,
+
+    // ---- DS娘 自有开关（v0.4）----
+    /// 关键词表认不出情绪时，用自训练小模型兜底（默认开）
+    #[serde(default = "default_true")]
+    pub ds_emotion_fallback: bool,
+    /// 启动时 + 每轮对话后静默云同步（默认开）
+    #[serde(default = "default_true")]
+    pub ds_cloud_sync: bool,
+    /// 云端记忆中枢地址
+    #[serde(default = "default_ds_cloud_url")]
+    pub ds_cloud_url: String,
+    /// 云端配对令牌（空 = 未配置，同步会跳过）
+    #[serde(default)]
+    pub ds_cloud_token: String,
+}
+
+fn default_ds_cloud_url() -> String {
+    "https://whale-girl-cloud.pages.dev".to_string()
 }
 
 // ========== Default 实现（单一真相源） ==========
@@ -140,6 +158,10 @@ impl Default for AppConfig {
             memory_promises_max_chars: default_memory_promises_max_chars(),
             disable_splash_animation: default_disable_splash_animation(),
             tts: TtsConfig::default(),
+            ds_emotion_fallback: true,
+            ds_cloud_sync: true,
+            ds_cloud_url: default_ds_cloud_url(),
+            ds_cloud_token: String::new(),
         }
     }
 }
@@ -278,6 +300,15 @@ impl AppConfig {
                 default.disable_splash_animation,
             ),
             tts: TtsConfig::from_store(Some(&store)),
+            ds_emotion_fallback: get_bool(
+                &store,
+                keys::DS_EMOTION_FALLBACK,
+                default.ds_emotion_fallback,
+            ),
+            ds_cloud_sync: get_bool(&store, keys::DS_CLOUD_SYNC, default.ds_cloud_sync),
+            ds_cloud_url: get_string(&store, keys::DS_CLOUD_URL)
+                .unwrap_or_else(|| default.ds_cloud_url.clone()),
+            ds_cloud_token: get_string(&store, keys::DS_CLOUD_TOKEN).unwrap_or_default(),
         })
     }
 }

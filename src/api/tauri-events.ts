@@ -3,11 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { eventQueue } from "../core/events/event-queue";
 import type { ScriptEventType } from "../types";
-import { useAdventureStore } from "../stores/modules/adventure";
 import { useUIStore } from "../stores/modules/ui/ui";
 import { useGameStore } from "../stores/modules/game";
 import { i18n } from "@/locales";
-import { useScriptEditorStore } from "../stores/modules/script-editor";
 import {
   clearToolCallPreparing,
   handleToolActivity,
@@ -18,8 +16,6 @@ import {
   type ToolActivityEvent,
 } from "./services/tool-settings";
 import { useDialogStore } from "../stores/modules/ui/dialog";
-import { useAsrStore } from "../stores/modules/settings/asr";
-import type { VadEvent } from "../api/services/asr";
 import type { SceneInfo } from "./services/scene";
 
 function asEvent(
@@ -38,31 +34,12 @@ function asEvent(
   } as unknown as ScriptEventType;
 }
 
-/**
- * 试玩事件的迟到丢弃。
- *
- * 试玩中止后，后端游离的流式任务（publisher/consumer）可能还会 emit 几条
- * ai:reply（如 TTS 仍在生成时的句子），它们经 IPC 到达前端时试玩可能已结束、
- * 甚至新一轮试玩已开始。这类事件必须丢弃，否则会串进自由对话历史或新一轮试玩。
- *
- * 判定规则：事件带 previewGen（试玩专用字段）时，仅当「当前在试玩 且 代号与
- * 本轮一致」才收；不带该字段的是自由对话/正式剧本回复，永远放行。
- */
-function isStalePreviewReply(payload: Record<string, unknown>): boolean {
-  const gen = payload.previewGen;
-  if (typeof gen !== "number") return false;
-  const store = useScriptEditorStore();
-  return !store.previewing || store.previewGeneration !== gen;
-}
-
 export function initializeTauriEventListeners() {
   const currentWindow = getCurrentWindow();
   const mainWindow = currentWindow.label === "main" ? currentWindow : null;
 
   listen("ai:reply", (event) => {
     const payload = event.payload as Record<string, unknown>;
-    // 试玩中止后迟到的流式回复：直接丢弃，不放进事件队列
-    if (isStalePreviewReply(payload)) return;
     console.log("[Tauri] ai:reply", event.payload);
     eventQueue.addEvent(asEvent(payload, { type: "reply", defaultDuration: -1 }));
   });
@@ -146,170 +123,16 @@ export function initializeTauriEventListeners() {
 
   // 审批框只在主窗口挂载；独立日志窗口等不能消费审批事件。
   // 主聊天 execute_command 审批：弹确认框，把用户决定回传给等待中的工具
-  mainWindow?.listen("chat:command_approval", async (event) => {
-    const payload = event.payload as {
-      request_id: string;
-      command: string;
-      cwd: string;
-      uac: boolean;
-    };
-    const dialogStore = useDialogStore();
-    const message =
-      i18n.global.t("ui.toolCalls.approvalMessage", {
-        command: payload.command,
-        cwd: payload.cwd || i18n.global.t("ui.toolCalls.approvalDefaultCwd"),
-      }) + (payload.uac ? `\n\n${i18n.global.t("ui.toolCalls.approvalUac")}` : "");
-    const approved = await dialogStore.confirm(
-      message,
-      i18n.global.t("ui.toolCalls.approvalTitle")
-    );
-    try {
-      await invoke("resolve_command_approval", { requestId: payload.request_id, approved });
-    } catch (e) {
-      console.warn("[Tauri] 回传命令审批结果失败（可能已超时）:", e);
-    }
-  });
 
   // execute_command 中识别到删除操作时使用独立危险确认；回传到删除审批队列。
-  mainWindow?.listen("chat:command_delete_approval", async (event) => {
-    const payload = event.payload as {
-      request_id: string;
-      command: string;
-      cwd: string;
-      uac: boolean;
-    };
-    const dialogStore = useDialogStore();
-    const message =
-      i18n.global.t("ui.toolCalls.commandDeleteApprovalMessage", {
-        command: payload.command,
-        cwd: payload.cwd || i18n.global.t("ui.toolCalls.approvalDefaultCwd"),
-      }) + (payload.uac ? `\n\n${i18n.global.t("ui.toolCalls.approvalUac")}` : "");
-    const approved = await dialogStore.confirm(
-      message,
-      i18n.global.t("ui.toolCalls.commandDeleteApprovalTitle")
-    );
-    try {
-      await invoke("resolve_file_delete_approval", {
-        requestId: payload.request_id,
-        approved,
-      });
-    } catch (e) {
-      console.warn("[Tauri] 回传删除命令审批结果失败（可能已超时）:", e);
-    }
-  });
 
   // 逐次确认模式下，write_file / edit_file 在真正修改前显示目标路径。
-  mainWindow?.listen("chat:file_change_approval", async (event) => {
-    const payload = event.payload as {
-      request_id: string;
-      path: string;
-      operation: "write" | "edit";
-    };
-    const dialogStore = useDialogStore();
-    const approved = await dialogStore.confirm(
-      i18n.global.t("ui.toolCalls.fileChangeApprovalMessage", {
-        action: i18n.global.t(`ui.toolCalls.fileChangeActions.${payload.operation}`),
-        path: payload.path,
-      }),
-      i18n.global.t("ui.toolCalls.fileChangeApprovalTitle")
-    );
-    try {
-      await invoke("resolve_file_change_approval", {
-        requestId: payload.request_id,
-        approved,
-      });
-    } catch (e) {
-      console.warn("[Tauri] 回传文件修改审批结果失败（可能已超时）:", e);
-    }
-  });
 
   // 主聊天 delete_file 审批：先显示后端解析并校验过的真实路径，再把决定回传给工具。
-  mainWindow?.listen("chat:file_delete_approval", async (event) => {
-    const payload = event.payload as {
-      request_id: string;
-      path: string;
-    };
-    const dialogStore = useDialogStore();
-    const approved = await dialogStore.confirm(
-      i18n.global.t("ui.toolCalls.fileDeleteApprovalMessage", { path: payload.path }),
-      i18n.global.t("ui.toolCalls.fileDeleteApprovalTitle")
-    );
-    try {
-      await invoke("resolve_file_delete_approval", {
-        requestId: payload.request_id,
-        approved,
-      });
-    } catch (e) {
-      console.warn("[Tauri] 回传删除审批结果失败（可能已超时）:", e);
-    }
-  });
 
   listen("status:reset", (event) => {
     console.log("[Tauri] status:reset", event.payload);
     eventQueue.addEvent(asEvent(event.payload, { type: "status_reset", defaultDuration: 0 }));
-  });
-
-  listen("tts:cleanup", (event) => {
-    const payload = event.payload as {
-      deleted?: number;
-      orphanFiles?: number;
-      orphanSize?: number;
-    };
-    console.log("[Tauri] tts:cleanup", payload);
-    try {
-      localStorage.setItem(
-        "lingchat:last_tts_cleanup",
-        JSON.stringify({
-          deleted: payload.deleted ?? 0,
-          orphanFiles: payload.orphanFiles ?? 0,
-          orphanSize: payload.orphanSize ?? 0,
-          timestamp: Date.now(),
-        })
-      );
-    } catch (e) {
-      console.warn("[Tauri] 保存 tts:cleanup 状态到 localStorage 失败:", e);
-    }
-  });
-
-  // === ASR events ===
-  // 注意：useAsrStore() 必须在回调内调用 —— initializeTauriEventListeners
-  // 在 app.use(pinia) 之前被 main.ts 调用，顶层调用 store 会抛
-  // "getActivePinia was called with no active Pinia"，导致 app.mount 不执行。
-  // 仅保留后端确实 emit 的事件：asr://result / asr://error 不存在（走 invoke 返回），
-  // useAsrInput 通过 store.vadEvent 订阅 turn 事件做业务处理（不重复 listen）。
-
-  listen<VadEvent>("asr://speech_started", () => {
-    useAsrStore().onSpeechStarted();
-  });
-  listen<VadEvent>("asr://turn_candidate", (event) => {
-    useAsrStore().onTurnCandidate(event.payload);
-  });
-  listen<VadEvent>("asr://turn_sealed", () => {
-    useAsrStore().onTurnSealed({ type: "turn_sealed" });
-  });
-  // 后端 init_asr VAD 模型加载成功（设置页状态面板显示"已加载"）
-  listen("asr://vad_ready", () => {
-    useAsrStore().setVadLoaded(true);
-  });
-
-  // === Adventure events ===
-
-  listen("adventure:unlocked", (event) => {
-    const payload = event.payload as any;
-    console.log("[Tauri] adventure:unlocked", payload);
-    const adventureStore = useAdventureStore();
-    if (payload?.adventure_folder) {
-      adventureStore.unlockNotifications.push(payload);
-    }
-  });
-
-  listen("adventure:completed", (event) => {
-    const payload = event.payload as any;
-    console.log("[Tauri] adventure:completed", payload);
-    const adventureStore = useAdventureStore();
-    if (payload?.adventure_folder) {
-      adventureStore.markAdventureCompleted(payload.adventure_folder);
-    }
   });
 
   // === Auto-save events ===
@@ -343,65 +166,7 @@ export function initializeTauriEventListeners() {
 
   // === Script events ===
 
-  listen("script:narration", (event) => {
-    eventQueue.addEvent(asEvent(event.payload, { type: "narration", defaultDuration: -1 }));
-  });
-
-  listen("script:player", (event) => {
-    eventQueue.addEvent(asEvent(event.payload, { type: "player", defaultDuration: -1 }));
-  });
-
-  listen("script:chapter-change", (event) => {
-    eventQueue.addEvent(asEvent(event.payload, { type: "chapter_change", defaultDuration: 0 }));
-  });
-
-  listen("script:background", (event) => {
-    eventQueue.addEvent(asEvent(event.payload, { type: "background", defaultDuration: 0 }));
-  });
-
-  listen("script:background-effect", (event) => {
-    eventQueue.addEvent(asEvent(event.payload, { type: "background_effect", defaultDuration: 0 }));
-  });
-
-  listen("script:music", (event) => {
-    eventQueue.addEvent(asEvent(event.payload, { type: "music", defaultDuration: 0 }));
-  });
-
-  listen("script:sound", (event) => {
-    eventQueue.addEvent(asEvent(event.payload, { type: "sound", defaultDuration: 0 }));
-  });
-
   // 环境音事件（多轨并行，与BGM共存）
-  listen("script:ambient", (event) => {
-    eventQueue.addEvent(asEvent(event.payload, { type: "ambient", defaultDuration: 0 }));
-  });
-
-  listen("script:present-pic", (event) => {
-    eventQueue.addEvent(asEvent(event.payload, { type: "present_pic", defaultDuration: -1 }));
-  });
-
-  listen("script:modify-character", (event) => {
-    eventQueue.addEvent(asEvent(event.payload, { type: "modify_character", defaultDuration: 0 }));
-  });
-
-  listen("script:input", (event) => {
-    eventQueue.addEvent(asEvent(event.payload, { type: "input", defaultDuration: 0 }));
-  });
-
-  listen("script:choice", (event) => {
-    eventQueue.addEvent(asEvent(event.payload, { type: "choice", defaultDuration: 0 }));
-  });
-
-  listen("script:end", (event) => {
-    console.log("[Tauri] script:end", event.payload);
-    eventQueue.addEvent(
-      asEvent(event.payload, { type: "script_end", defaultDuration: 0, isFinal: true })
-    );
-  });
-
-  listen("script:free-dialogue", (event) => {
-    eventQueue.addEvent(asEvent(event.payload, { type: "free_dialogue", defaultDuration: 0 }));
-  });
 
   // === God Agent multi-dialogue event ===
 
@@ -424,15 +189,6 @@ export function initializeTauriEventListeners() {
   });
 
   // === LLM 场景工具事件 ===
-
-  listen("scene:switch", (event) => {
-    const payload = event.payload as { type: string; scene: SceneInfo };
-    console.log("[Tauri] scene:switch", payload);
-    const gameStore = useGameStore();
-    const uiStore = useUIStore();
-    gameStore.setCurrentScene(payload.scene);
-    uiStore.setCurrentBackground(payload.scene.background ?? "");
-  });
 
   console.log(
     "[Tauri] Event listeners initialized (ai + ai:thinking_progress + tts:cleanup + adventure + auto-save + 13 script events + character:switch + scene:switch)"
@@ -463,22 +219,9 @@ export function initializeCastWindowListeners() {
     uiStore.showCharacterSubtitle = role.roleSubTitle;
   });
 
-  listen("scene:switch", (event) => {
-    const payload = event.payload as { type: string; scene: SceneInfo };
-    const gameStore = useGameStore();
-    const uiStore = useUIStore();
-    gameStore.setCurrentScene(payload.scene);
-    uiStore.setCurrentBackground(payload.scene.background ?? "");
-  });
-
   // 投屏客户端麦克风经投屏 /ws 送到 Rust ASR，识别文本由这里注入对话。
   // 复用既有 asr-send 自定义事件 → GameDialog.onAsrAutoSend → send()（sendMessage）。
   // 仅投屏窗口注册此监听（主窗口不注册），保证每次识别恰好注入一次。
-  listen("cast:mic:recognized", (event) => {
-    const { text } = event.payload as { text: string };
-    if (!text) return;
-    window.dispatchEvent(new CustomEvent("asr-send", { detail: text }));
-  });
 
   console.log(
     "[Tauri] Cast window listeners initialized (scene:switch + character:switch + cast:mic:recognized)"

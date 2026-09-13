@@ -87,18 +87,6 @@
                     @click="openHistory"
                   ></Button>
 
-                  <!-- 语音输入按钮（auto_listen 开启时变为关闭开关） -->
-                  <Button
-                    type="nav"
-                    :icon="micIcon"
-                    :title="micTitle"
-                    :class="{
-                      'animate-asr-breathe text-blue-500': asrInput.phase.value === 'recording',
-                    }"
-                    :disabled="!canStartMic"
-                    @click="toggleRecording"
-                  ></Button>
-
                   <div class="group relative inline-flex">
                     <div
                       v-if="hasScreenshot"
@@ -125,7 +113,6 @@
                       @contextmenu.prevent="clearScreenshot"
                     ></Button>
                   </div>
-
                 </div>
               </div>
             </template>
@@ -166,16 +153,6 @@
                 icon="history"
                 :title="$t('game.dialog.history')"
                 @click="onMobileMenuAction(openHistory)"
-              ></Button>
-              <Button
-                type="nav"
-                :icon="micIcon"
-                :title="micTitle"
-                :class="{
-                  'animate-asr-breathe text-blue-500': asrInput.phase.value === 'recording',
-                }"
-                :disabled="!canStartMic"
-                @click="onMobileMenuAction(toggleRecording)"
               ></Button>
               <div class="group relative inline-flex">
                 <div
@@ -276,14 +253,6 @@
   import { computed, onMounted, onUnmounted, ref, watch } from "vue";
   import { useI18n } from "vue-i18n";
   import { useTypeWriter } from "../../../composables/ui/useTypeWriter";
-  import {
-    ASR_AUTO_SEND_DELAY_MS,
-    asrVoiceActive,
-    lockAsrForDisplay,
-    registerAsrInputBridge,
-    setMobileMenuOpen,
-    useAsrInput,
-  } from "../../../composables/useAsrInput";
   import { setInputHasText } from "../../../composables/useCanDeliver";
   import { useDialogAppearance } from "../../../composables/useDialogAppearance";
   import { dialogueMerge } from "../../../core/events/dialogue-merge";
@@ -291,13 +260,13 @@
   import { useGameStore } from "../../../stores/modules/game";
   import { useLlmProvidersStore } from "../../../stores/modules/llm-providers";
   import { useSettingsStore } from "../../../stores/modules/settings";
-  import { useAsrStore } from "../../../stores/modules/settings/asr";
   import { useDialogStore } from "../../../stores/modules/ui/dialog";
   import { useUIStore } from "../../../stores/modules/ui/ui";
   import { escapeHtml } from "../../../utils/escapeHtml";
   import { createCharRevealWriter } from "../../../utils/typewriter/charReveal";
   import { TypeWriter } from "../../../utils/typewriter/TypeWriter";
   import { Button } from "../../base";
+  import { recordChat } from "../../../api/ds-silent-log";
   import katex from "katex";
   import "katex/dist/katex.min.css";
 
@@ -326,8 +295,6 @@
   // 移动端按钮折叠状态（但是基于长宽比判断）
   const isMobile = ref(uiStore.aspectRatio <= 1);
   const showMobileMenu = ref(false);
-  // 同步给 ASR 模块：移动端菜单展开时禁用语音输入（§1.5）
-  watch(showMobileMenu, (open) => setMobileMenuOpen(open));
 
   // 当前游戏状态（模板 v-show 判定回复显示区 / 输入框）
   const currentStatus = computed(() => gameStore.currentStatus);
@@ -335,42 +302,6 @@
   // 标题栏（角色名 + 副标题）切换 key：任一变化时整体一起滑出/滑入
   const titleSubtitleKey = computed(
     () => `${uiStore.showCharacterTitle}|${uiStore.showCharacterSubtitle}`
-  );
-
-  // 语音输入：useAsrInput 统一两种触发源（mic 按钮 / 自动监听），
-  // 替换上游的 Web Speech API 实现（状态为模块级单例，GameRolesStage 等共享）
-  const asrInput = useAsrInput();
-  const asrStore = useAsrStore();
-
-  // auto_listen 模式开 + 总开关开：mic 按钮 = 功能开关（监听激活 → 暂停；暂停 → 恢复），
-  // 不改模式设置。总开关关（自动模式已停）→ 退化为手动录音。
-  const autoListenOn = computed(() => asrStore.settings.auto_listen);
-  const autoListenActive = computed(() => asrInput.autoListenActive.value);
-  const micIcon = computed(() => {
-    if (autoListenOn.value && asrStore.settings.voice_input_enabled) {
-      return autoListenActive.value ? "mic-off" : "mic";
-    }
-    return "mic";
-  });
-  const micTitle = computed(() => {
-    if (autoListenOn.value && asrStore.settings.voice_input_enabled) {
-      return autoListenActive.value
-        ? t("game.dialog.asrAutoOff") // 监听中：暂停
-        : t("game.dialog.asrAutoResume"); // 已暂停：恢复
-    }
-    return asrInput.phase.value === "recording"
-      ? t("game.dialog.recordingStop")
-      : t("game.dialog.voiceInput");
-  });
-
-  // mic 按钮 enabled 条件（与 useAsrInput.canStartAsr 对齐）：
-  // - auto_listen 模式开 + 总开关开：功能开关可用
-  // - 总开关关 → 整体禁用（总开关是语音输入的总闸，手动 mic 一并关闭）
-  const canStartMic = computed(
-    () =>
-      (autoListenOn.value && asrStore.settings.voice_input_enabled) ||
-      asrInput.phase.value === "recording" ||
-      asrInput.canStartAsr(false, true)
   );
 
   // 截图相关状态
@@ -635,11 +566,6 @@
   };
 
   const placeholderText = computed(() => {
-    // 录音中：展示"正在聆听"（流式模式 partial 已实时写入输入框，此占位仅兜底非流式）
-    if (asrInput.phase.value === "recording") {
-      return t("game.dialog.listening");
-    }
-
     switch (gameStore.currentStatus) {
       case "input":
         return uiStore.showPlayerHintLine || t("game.dialog.inputPlaceholder");
@@ -662,9 +588,7 @@
     }
   });
 
-  const isInputEnabled = computed(
-    () => gameStore.currentStatus === "input" && !asrVoiceActive.value
-  );
+  const isInputEnabled = computed(() => gameStore.currentStatus === "input");
 
   watch(
     () => gameStore.currentStatus,
@@ -791,48 +715,6 @@
     }
   });
 
-  // === 语音输入 toggle（useAsrInput 接管生命周期，替换上游 Web Speech 实现） ===
-  async function toggleRecording() {
-    try {
-      // auto_listen 模式开 + 总开关开：mic 按钮 = 切换功能开关（暂停/恢复监听），
-      // 不改模式设置；总开关关 → 走手动录音分支
-      if (autoListenOn.value && asrStore.settings.voice_input_enabled) {
-        asrInput.toggleAutoListenFunction();
-        return;
-      }
-      if (asrInput.phase.value === "idle") {
-        await asrInput.start("button");
-      } else if (asrInput.phase.value === "recording") {
-        asrInput.stop();
-      }
-    } catch (err) {
-      console.warn("[ASR] toggle failed:", err);
-    }
-  }
-
-  // 监听 asr-text 事件（useAsrInput fill_only 模式 dispatch）
-  // fill_only 语义：识别结果填入 inputMessage，由用户手动发送（Enter / 发送按钮）。
-  // 短暂显示锁仅防 auto_listen 立即再触发录音覆盖刚填入的内容（§1.10）。
-  const ASR_DISPLAY_MS = 400;
-  function onAsrText(e: Event) {
-    const ce = e as CustomEvent<string>;
-    if (typeof ce.detail === "string") {
-      inputMessage.value = ce.detail;
-      lockAsrForDisplay(ASR_DISPLAY_MS);
-    }
-  }
-
-  // 监听 asr-send 事件（useAsrInput auto_send 模式 dispatch）：
-  // 识别结果先显示到输入框，ASR_AUTO_SEND_DELAY_MS 后走 send()——
-  // 完整复用剧本分支（runningScript → script_submit_input）、模型配置检查与
-  // 输入框清理（显示锁已由 handle() 设置，这里不重复 lock）
-  function onAsrAutoSend(e: Event) {
-    const ce = e as CustomEvent<string>;
-    if (typeof ce.detail !== "string") return;
-    inputMessage.value = ce.detail;
-    window.setTimeout(() => send(), ASR_AUTO_SEND_DELAY_MS);
-  }
-
   let unlistenScreenshot: (() => void) | null = null;
   let unlistenCancelled: (() => void) | null = null;
 
@@ -846,17 +728,6 @@
     document.addEventListener("contextmenu", handleDialogShow);
     // 移动端：点击屏幕恢复被关闭的对话框
     document.addEventListener("click", handleMobileTapToRestore);
-    // 监听 asr-text 事件（fill_only 模式 dispatch）
-    window.addEventListener("asr-text", onAsrText);
-    // 监听 asr-send 事件（auto_send 模式 dispatch）
-    window.addEventListener("asr-send", onAsrAutoSend);
-    // 输入框桥：流式 partial 实时写入 + 拼接基准读取
-    registerAsrInputBridge({
-      getText: () => inputMessage.value,
-      setText: (v) => {
-        inputMessage.value = v;
-      },
-    });
     // 初始化容器宽度
     updateContainerWidth();
     // 监听窗口大小变化
@@ -885,8 +756,6 @@
     document.removeEventListener("contextmenu", handleDialogShow);
     document.removeEventListener("click", handleMobileTapToRestore);
     window.removeEventListener("resize", updateContainerWidth);
-    window.removeEventListener("asr-text", onAsrText);
-    window.removeEventListener("asr-send", onAsrAutoSend);
     if (unlistenScreenshot) unlistenScreenshot();
     if (unlistenCancelled) unlistenCancelled();
   });
@@ -938,6 +807,9 @@
       displayName: gameStore.userName,
       content: text,
     });
+
+    // DS娘 v0.4 静默日志：用户输入同样落本地（带时间戳），不新增界面
+    recordChat({ role: "user", text });
 
     // In script mode, submit input to the script engine; otherwise use chat
     if (gameStore.runningScript) {

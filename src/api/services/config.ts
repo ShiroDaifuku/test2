@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { invalidateDsEmotionSetting } from "@/api/ds-emotion";
+import { invalidateCloudSettings } from "@/api/ds-cloud-sync";
 
 export type StructuredConfig = Record<string, any>;
 
@@ -15,7 +17,15 @@ export async function fetchEnvConfig(): Promise<StructuredConfig> {
 }
 
 export async function saveEnvConfig(values: Record<string, string>): Promise<string> {
-  return invoke("save_settings", { values });
+  const r = await invoke<string>("save_settings", { values });
+  // DS娘 v0.4：设置一改就清缓存，否则"情绪兜底""云同步"这类开关要重启才生效
+  try {
+    invalidateDsEmotionSetting();
+    invalidateCloudSettings();
+  } catch (e) {
+    /* 清缓存失败不影响保存结果 */
+  }
+  return r;
 }
 
 /**

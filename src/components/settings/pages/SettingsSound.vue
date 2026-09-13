@@ -194,7 +194,6 @@
                 text-ellipsis whitespace-nowrap"
             >
               <span class="truncate">{{ music.name }}</span>
-              <PluginTag v-if="music.source && music.source !== 'game'" :source="music.source" />
             </div>
             <button
               v-if="!music.source || music.source === 'game'"
@@ -268,10 +267,6 @@
           >
             <Wind :size="13" class="shrink-0 text-teal-400/60" />
             <span class="flex-1 truncate text-sm text-gray-200">{{ ambient.name }}</span>
-            <PluginTag
-              v-if="ambient.source && ambient.source !== 'game'"
-              :source="ambient.source"
-            />
             <button
               @click="addFileToTrack(ambient)"
               class="rounded bg-teal-500/20 px-2 py-0.5 text-xs text-teal-300 opacity-70
@@ -415,7 +410,6 @@
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { Button, Slider } from "../../base";
   import { MenuItem, MenuPage } from "../../ui";
-  import PluginTag from "@/components/ui/PluginTag.vue";
   import { musicDialogFilters } from "@/utils/dialogFilters";
   import {
     musicDelete,
@@ -431,7 +425,6 @@
   } from "../../../api/services/ambient";
   import { useUIStore } from "../../../stores/modules/ui/ui";
   import { useDialogStore } from "../../../stores/modules/ui/dialog";
-  import { useRoleArchiveStore } from "../../../stores/modules/ui/role-archive";
   import { useSettingsStore } from "../../../stores/modules/settings";
   import {
     currentDeviceId,
@@ -470,7 +463,6 @@
   const uiStore = useUIStore();
   const settingsStore = useSettingsStore();
   const dialogStore = useDialogStore();
-  const roleStore = useRoleArchiveStore();
   const { t } = useI18n();
 
   // 状态绑定
@@ -820,20 +812,7 @@
       for (const path of selectedPaths.value) {
         // content:// URI 文件名是 URL 编码的，解码后才是真实文件名
         const fileName = decodePathFileName(path);
-        const result = await musicUpload(path, fileName);
-        // 自动修正时弹顶部 amber notice
-        if (result.was_corrected) {
-          const originalExt = result.original_name.split(".").pop() || "";
-          roleStore.showCorrected({
-            title: t("ui.notice.autoCorrected.title"),
-            message: t("ui.notice.autoCorrected.music", {
-              original: result.original_name,
-              originalExt,
-              detected: result.detected_kind,
-              corrected: result.actual_name,
-            }),
-          });
-        }
+        await musicUpload(path, fileName);
       }
 
       selectedPaths.value = [];

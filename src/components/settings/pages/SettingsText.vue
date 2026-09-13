@@ -309,151 +309,6 @@
           </div>
         </div>
       </MenuItem>
-
-      <!-- ─── 版本更新 ──────────────────────────────── -->
-      <MenuItem :title="$t('settings.text.update.title')" size="small">
-        <template #header>
-          <RefreshCw :size="20" :class="{ 'animate-spin': updateChecking }" />
-        </template>
-        <div class="w-full space-y-2">
-          <!-- 程序版本 -->
-          <div class="flex items-center justify-between text-base">
-            <span class="text-gray-50">{{ $t("settings.text.update.appVersion") }}</span>
-            <span class="text-gray-50">v{{ currentAppVersion }}</span>
-          </div>
-          <!-- 数据版本 -->
-          <div class="flex items-center justify-between text-base">
-            <span class="text-gray-50">{{ $t("settings.text.update.dataVersion") }}</span>
-            <span class="text-gray-50">v{{ currentDataVersion }}</span>
-          </div>
-          <!-- 状态文字（内联显示，不用 modal） -->
-          <div v-if="updateStatusText" :class="updateStatusColor" class="text-sm font-medium">
-            {{ updateStatusText }}
-          </div>
-          <!-- 下载进度条 -->
-          <div
-            v-if="updatePhase === 'downloading'"
-            class="h-2 w-full overflow-hidden rounded-full bg-slate-700/50"
-          >
-            <div
-              class="h-full rounded-full bg-cyan-400 transition-all duration-300"
-              :style="{ width: `${downloadProgress}%` }"
-            ></div>
-          </div>
-          <div class="flex gap-3 pt-1">
-            <Button
-              type="big"
-              @click="handleCheckUpdate"
-              :disabled="updateChecking || updatePhase === 'downloading'"
-            >
-              {{
-                updateChecking
-                  ? $t("settings.text.update.checking")
-                  : $t("settings.text.update.checkButton")
-              }}
-            </Button>
-            <Button
-              v-if="updateAvailable"
-              type="big"
-              variant="primary"
-              :disabled="updatePhase === 'downloading'"
-              @click="handleInstallUpdate"
-            >
-              {{
-                updatePhase === "downloading"
-                  ? $t("settings.text.update.downloading")
-                  : $t("settings.text.update.updateTo", { version: updateLatestVersion })
-              }}
-            </Button>
-            <Button
-              v-if="resourceSyncAvailable && updatePhase !== 'downloading'"
-              type="big"
-              @click="handleCheckResourceSync"
-            >
-              {{ $t("settings.text.update.syncData") }}
-            </Button>
-          </div>
-          <!-- 资源同步对话框 -->
-          <ResourceSyncDialog
-            :visible="showResourceSyncDialog"
-            :phase="resourceSyncPhase"
-            :sync-info="resourceSyncInfo"
-            :error-message="resourceSyncError"
-            @apply="handleApplyResourceSync"
-            @close="handleResourceSyncClose"
-          />
-        </div>
-      </MenuItem>
-
-      <!-- ─── 局域网同步 ──────────────────────────────── -->
-      <MenuItem :title="$t('settings.text.lanSync.title')" size="small">
-        <template #header>
-          <Wifi :size="20" />
-        </template>
-        <div class="w-full space-y-2">
-          <p class="text-sm text-gray-50/70">
-            {{ $t("settings.text.lanSync.desc") }}
-          </p>
-          <div class="flex gap-3 pt-1">
-            <Button type="big" @click="openLanSync">
-              {{ $t("settings.text.lanSync.open") }}
-            </Button>
-          </div>
-          <!-- 局域网同步对话框 -->
-          <LanSyncDialog
-            :visible="lanSync.dialogVisible.value"
-            :view="lanSyncView"
-            :phase="lanSync.phase.value"
-            :server-port="lanSync.serverPort.value"
-            :peers="lanSync.peers.value"
-            :sync-plan="lanSync.syncPlan.value"
-            :progress="lanSync.progress.value"
-            :last-result="lanSync.lastResult.value"
-            :error-message="lanSync.errorMessage.value"
-            :debug-info="lanSync.debugInfo.value"
-            @close="lanSync.closeDialog()"
-            @rescan="lanSync.scanPeers()"
-            @manual-add="onManualPeerAdd"
-            @pull="
-              (peer) => {
-                lanSync.selectPeer(peer);
-                lanSync.planPull();
-              }
-            "
-            @push="
-              (peer) => {
-                lanSync.selectPeer(peer);
-                lanSync.planPush();
-              }
-            "
-            @confirm="handleLanSyncConfirm"
-            @cancel="lanSync.reset()"
-            @restart="lanSync.restart()"
-          />
-        </div>
-      </MenuItem>
-      <!-- ─── 相关文档 ──────────────────────────────── -->
-      <MenuItem :title="$t('settings.text.docs.title')" size="small">
-        <template #header>
-          <BookOpen :size="20" />
-        </template>
-        <div class="w-full space-y-2">
-          <p class="text-sm text-gray-50/70">
-            {{ $t("settings.text.docs.desc") }}
-          </p>
-          <div class="flex gap-3 pt-1">
-            <Button
-              type="big"
-              @click="
-                openWebsite(
-                  'https://slimeboyowo.github.io/LingBlog/blog/projects/ling-chat/develop/'
-                )
-              "
-              >{{ $t("settings.text.docs.button") }}</Button
-            >
-          </div>
-        </div>
-      </MenuItem>
     </MenuPage>
   </div>
 </template>
@@ -477,14 +332,8 @@
   } from "@/api/services/font";
   import type { WebInitData } from "@/api/services/game-info";
   import { clearTtsCache, reactivateTTS } from "@/api/services/game-info";
-  import LanSyncDialog from "@/components/LanSyncDialog.vue";
-  import ResourceSyncDialog from "@/components/ResourceSyncDialog.vue";
-  import { useLanSync } from "@/composables/useLanSync";
-  import { useUpdater } from "@/composables/useUpdater";
   import { applyWebInitData } from "@/stores/modules/game/actions";
   import { useLlmProvidersStore } from "@/stores/modules/llm-providers";
-  import type { DialogView } from "@/types/lanSync";
-  import { getVersion } from "@tauri-apps/api/app";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -506,7 +355,6 @@
     Timer,
     Trash2,
     Type,
-    Wifi,
     Zap,
   } from "lucide-vue-next";
   import { computed, onMounted, onUnmounted, ref, watch } from "vue";
@@ -515,7 +363,6 @@
   import { useGameStore } from "../../../stores/modules/game";
   import { useSettingsStore } from "../../../stores/modules/settings";
   import { useDialogStore } from "../../../stores/modules/ui/dialog";
-  import { useRoleArchiveStore } from "../../../stores/modules/ui/role-archive";
   import { useUIStore } from "../../../stores/modules/ui/ui";
   import { Button, Slider, Text, Toggle } from "../../base";
   import { MenuItem, MenuPage } from "../../ui";
@@ -525,7 +372,6 @@
   // 模板里不能用 import.meta（模板表达式按非 module 解析），这里提前取出
   const isDevMode = import.meta.env.DEV;
   const uiStore = useUIStore();
-  const roleStore = useRoleArchiveStore();
   const settingsStore = useSettingsStore();
   const gameStore = useGameStore();
   const dialogStore = useDialogStore();
@@ -603,193 +449,6 @@
 
   // 判断是否在自由对话模式（没有运行剧本）
   const isFreeDialogMode = computed(() => gameStore.runningScript === null);
-
-  // ─── 更新检查 ────────────────────────────────────────────────
-
-  const updater = useUpdater();
-  const {
-    phase: updatePhase,
-    appVersion: updateAppVersion,
-    errorMessage: updateErrorMessage,
-    downloadProgress,
-    // 资源同步
-    resourceSyncInfo,
-    resourceSyncPhase,
-    resourceSyncError,
-    checkResourceSync,
-    applyResourceSync,
-    getDataVersion,
-    resetResourceSync,
-  } = updater;
-
-  const currentAppVersion = ref("0.1.0");
-  const currentDataVersion = ref(0);
-  const updateLatestVersion = ref("");
-  const updateChecking = ref(false);
-  const showResourceSyncDialog = ref(false);
-  const resourceSyncAvailable = ref(false);
-
-  const updateAvailable = computed(
-    () => updateLatestVersion.value !== "" && updatePhase.value === "app-update-available"
-  );
-
-  const updateStatusText = computed(() => {
-    if (updatePhase.value === "checking") return t("settings.text.update.statusChecking");
-    if (updatePhase.value === "downloading")
-      return t("settings.text.update.statusDownloading", { progress: downloadProgress.value });
-    if (updatePhase.value === "complete") return t("settings.text.update.statusComplete");
-    if (updatePhase.value === "error")
-      return updateErrorMessage.value || t("settings.text.update.statusError");
-    if (updateAvailable.value) return t("settings.text.update.statusAvailable");
-    return "";
-  });
-
-  const updateStatusColor = computed(() => {
-    if (updatePhase.value === "error") return "text-red-400";
-    if (updateAvailable.value) return "text-amber-400";
-    if (updatePhase.value === "complete") return "text-green-400";
-    return "text-green-400";
-  });
-
-  async function loadAppVersion() {
-    try {
-      currentAppVersion.value = await getVersion();
-    } catch {
-      // 使用默认值
-    }
-  }
-
-  async function loadDataVersion() {
-    currentDataVersion.value = await getDataVersion();
-  }
-
-  /** 进入页面时自动检查一次（静默，失败不弹窗） */
-  async function autoCheckUpdate() {
-    try {
-      const hasUpdate = await updater.checkForUpdates();
-      if (hasUpdate) {
-        updateLatestVersion.value = updateAppVersion.value;
-      }
-      // 自动检查失败：重置错误状态，不显示任何提示
-    } catch {
-      updater.reset();
-    }
-  }
-
-  async function handleCheckUpdate() {
-    updateChecking.value = true;
-    updateLatestVersion.value = "";
-    try {
-      const hasUpdate = await updater.checkForUpdates();
-      if (hasUpdate) {
-        updateLatestVersion.value = updateAppVersion.value;
-      }
-      // 失败或错误状态通过 updatePhase / updateStatusText 内联展示
-    } finally {
-      updateChecking.value = false;
-    }
-  }
-
-  /** 直接安装更新（下载进度+状态全部内联） */
-  async function handleInstallUpdate() {
-    try {
-      await updater.installAppUpdate();
-      // 成功：phase 变为 'complete'，自动重启
-    } catch {
-      // 错误通过 phase 内联展示
-    }
-  }
-
-  async function handleCheckResourceSync() {
-    const hasUpdate = await checkResourceSync();
-    if (hasUpdate) {
-      showResourceSyncDialog.value = true;
-    }
-    // 刷新数据版本号
-    await loadDataVersion();
-  }
-
-  async function handleApplyResourceSync(selectedFiles: string[]) {
-    await applyResourceSync(selectedFiles);
-    // 刷新数据版本号
-    await loadDataVersion();
-  }
-
-  function handleResourceSyncClose() {
-    showResourceSyncDialog.value = false;
-    resetResourceSync();
-  }
-
-  // ─── 局域网同步 ────────────────────────────────────────────────
-
-  const lanSync = useLanSync();
-  const lanSyncView = ref<DialogView>("device-list");
-
-  // 监听阶段变化，自动切换视图
-  watch(
-    () => lanSync.phase.value,
-    (newPhase) => {
-      switch (newPhase) {
-        case "idle":
-        case "scanning":
-          lanSyncView.value = "device-list";
-          break;
-        case "planning":
-          lanSyncView.value = "sync-plan";
-          break;
-        case "executing":
-          lanSyncView.value = "progress";
-          break;
-        case "complete":
-        case "error":
-          lanSyncView.value = "result";
-          break;
-      }
-    }
-  );
-
-  async function openLanSync() {
-    lanSync.init();
-    await lanSync.openDialog();
-    lanSyncView.value = "device-list";
-  }
-
-  async function handleLanSyncConfirm() {
-    const plan = lanSync.syncPlan.value;
-    if (!plan) return;
-    lanSyncView.value = "progress";
-    if (plan.direction === "pull") {
-      await lanSync.executePull();
-    } else {
-      await lanSync.executePush();
-    }
-  }
-
-  async function onManualPeerAdd(url: string, token: string) {
-    try {
-      await lanSync.addManualPeer(url, token);
-      await lanSync.planPull();
-      await lanSync.refreshDebugInfo();
-    } catch (e) {
-      lanSync.errorMessage.value = String(e);
-      lanSync.phase.value = "error";
-    }
-  }
-
-  // 加载版本号、预检更新和数据同步
-  loadAppVersion();
-  loadDataVersion();
-  autoCheckUpdate();
-  checkResourceSyncAvailability();
-
-  async function checkResourceSyncAvailability() {
-    try {
-      const info = await checkResourceSync();
-      resourceSyncAvailable.value = info;
-    } catch {
-      resourceSyncAvailable.value = false;
-    }
-  }
 
   const returnToMain = () => {
     uiStore.toggleSettings(false);
@@ -1003,19 +662,6 @@
       registerFontFace(result.font_family, result.file_path);
       clearImportedFontsCache();
       await loadImportedFonts();
-      // 发生自动修正时弹顶部 amber notice 提示用户
-      if (result.was_corrected) {
-        const originalExt = result.original_name.split(".").pop() || "";
-        roleStore.showCorrected({
-          title: t("ui.notice.autoCorrected.title"),
-          message: t("ui.notice.autoCorrected.font", {
-            original: result.original_name,
-            originalExt,
-            detected: result.detected_kind,
-            corrected: result.actual_name,
-          }),
-        });
-      }
       uiStore.showNotification({
         type: "success",
         title: "字体导入成功",

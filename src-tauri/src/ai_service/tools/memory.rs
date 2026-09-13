@@ -36,12 +36,18 @@ fn notes_dir() -> PathBuf {
 
 /// 角色笔记文件路径。文件名取自 LingChat 权威角色名（display_name），
 /// sanitize 后拼接，保证路径安全且与角色信息对齐。
-fn role_notes_path(display_name: &str) -> PathBuf {
+///
+/// 对 `api::ds_memory` 可见（`pub(crate)`），供「静默云同步」命令读写同一个文件；
+/// 除此之外行为与此前完全一致。
+pub(crate) fn role_notes_path(display_name: &str) -> PathBuf {
     notes_dir().join(format!("{}.json", sanitize_role_name(display_name)))
 }
 
 /// 清理角色名中的非法文件名字符，兜底防空/防 `..`。
-fn sanitize_role_name(name: &str) -> String {
+///
+/// 对 `api::ds_memory` 可见（`pub(crate)`），保证命令侧与工具侧对同一个角色
+/// 解析出同一个文件名。
+pub(crate) fn sanitize_role_name(name: &str) -> String {
     let cleaned: String = name
         .trim()
         .chars()
@@ -55,7 +61,11 @@ fn sanitize_role_name(name: &str) -> String {
     }
 }
 
-fn load_role_notes(display_name: &str) -> Result<Vec<Note>, String> {
+/// 读取某角色的手动笔记。文件不存在时返回空列表。
+///
+/// 对 `api::ds_memory` 可见（`pub(crate)`），供「静默云同步」命令复用同一套
+/// 文件规则与解析逻辑（行为与此前完全一致）。
+pub(crate) fn load_role_notes(display_name: &str) -> Result<Vec<Note>, String> {
     let path = role_notes_path(display_name);
     if !path.exists() {
         return Ok(Vec::new());
@@ -66,7 +76,10 @@ fn load_role_notes(display_name: &str) -> Result<Vec<Note>, String> {
 }
 
 /// 原子写入角色笔记（.tmp + rename）。
-fn save_role_notes(display_name: &str, notes: &[Note]) -> Result<(), String> {
+///
+/// 对 `api::ds_memory` 可见（`pub(crate)`），让命令侧的覆盖写与工具侧共用同一套
+/// 原子替换实现（可见性之外无任何行为改动）。
+pub(crate) fn save_role_notes(display_name: &str, notes: &[Note]) -> Result<(), String> {
     let path = role_notes_path(display_name);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建笔记目录失败: {e}"))?;

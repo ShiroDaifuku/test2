@@ -861,6 +861,9 @@ pub fn run() {
             api::schedule::get_schedules,
             api::schedule::save_schedules,
             api::schedule::reload_proactive_system,
+            // DS娘 v0.4：静默云同步用的手动笔记读写（当前角色）
+            api::ds_memory::ds_get_notes,
+            api::ds_memory::ds_set_notes,
             api::proactive_set_can_deliver,
             api::tool_settings::get_tool_settings,
             api::tool_settings::get_tool_runtime_info,

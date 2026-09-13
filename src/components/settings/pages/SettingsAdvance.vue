@@ -31,28 +31,6 @@
         <button
           class="rounded-md px-4 py-1.5 text-sm font-medium transition-all duration-200"
           :class="
-            advanceTab === 'tts'
-              ? 'bg-brand text-white shadow-[0_2px_8px_rgba(0,0,0,0.3)]'
-              : 'text-white/60 hover:text-white/80'
-          "
-          @click="advanceTab = 'tts'"
-        >
-          {{ $t("advance.tabs.tts") }}
-        </button>
-        <button
-          class="rounded-md px-4 py-1.5 text-sm font-medium transition-all duration-200"
-          :class="
-            advanceTab === 'asr'
-              ? 'bg-brand text-white shadow-[0_2px_8px_rgba(0,0,0,0.3)]'
-              : 'text-white/60 hover:text-white/80'
-          "
-          @click="advanceTab = 'asr'"
-        >
-          {{ $t("advance.tabs.asr") }}
-        </button>
-        <button
-          class="rounded-md px-4 py-1.5 text-sm font-medium transition-all duration-200"
-          :class="
             advanceTab === 'tools'
               ? 'bg-brand text-white shadow-[0_2px_8px_rgba(0,0,0,0.3)]'
               : 'text-white/60 hover:text-white/80'
@@ -60,17 +38,6 @@
           @click="advanceTab = 'tools'"
         >
           {{ $t("advance.tabs.tools") }}
-        </button>
-        <button
-          class="rounded-md px-4 py-1.5 text-sm font-medium transition-all duration-200"
-          :class="
-            advanceTab === 'cast'
-              ? 'bg-brand text-white shadow-[0_2px_8px_rgba(0,0,0,0.3)]'
-              : 'text-white/60 hover:text-white/80'
-          "
-          @click="advanceTab = 'cast'"
-        >
-          {{ $t("advance.tabs.cast") }}
         </button>
         <button
           class="rounded-md px-4 py-1.5 text-sm font-medium transition-all duration-200"
@@ -95,24 +62,9 @@
         <SettingsLlmProviders />
       </div>
 
-      <!-- ====== 本地 TTS ====== -->
-      <div v-else-if="advanceTab === 'tts'" class="min-h-0 flex-1">
-        <SettingsTts />
-      </div>
-
-      <!-- ====== 语音识别 ====== -->
-      <div v-else-if="advanceTab === 'asr'" class="min-h-0 flex-1">
-        <SettingsAsr />
-      </div>
-
       <!-- ====== 工具配置 ====== -->
       <div v-else-if="advanceTab === 'tools'" class="min-h-0 flex-1">
         <SettingsTools />
-      </div>
-
-      <!-- ====== 投影配置 ====== -->
-      <div v-else-if="advanceTab === 'cast'" class="min-h-0 flex-1">
-        <SettingsCast />
       </div>
 
       <!-- ====== 其他高级设置 ====== -->
@@ -131,12 +83,9 @@
   import { MenuPage } from "../../ui";
   import SettingsLlmProviders from "./SettingsLlmProviders.vue";
   import SettingsAdvanceMenu from "./SettingsAdvanceMenu.vue";
-  import SettingsTts from "./SettingsTts.vue";
-  import SettingsAsr from "./SettingsAsr.vue";
   import SettingsTools from "./SettingsTools.vue";
   import SettingsAdvanceOther from "./SettingsAdvanceOther.vue";
   import { useUIStore } from "@/stores/modules/ui/ui";
-  import SettingsCast from "./SettingsCast.vue";
 
   const uiStore = useUIStore();
 

@@ -31,14 +31,11 @@
   import { computed, ref, watch, type Component } from "vue";
   import { useUIStore } from "../../stores/modules/ui/ui";
   import {
-    SettingsAchievement,
     SettingsAdvance,
-    SettingsAdventure,
     SettingsBackground,
     SettingsCharacter,
     SettingsHistory,
     SettingsLog,
-    SettingsPlugins,
     SettingsSave,
     SettingsSound,
     SettingsText,
@@ -80,16 +77,13 @@
   // 标签顺序与 SettingsNav 导航一致
   const TABS = [
     "character",
-    "adventure",
     "text",
     "background",
     "sound",
     "history",
-    "achievement",
     "save",
     "advance",
     "log",
-    "plugins",
   ] as const;
 
   // 标签 → 组件映射（推入推出转场用 v-if 动态组件）
@@ -98,13 +92,10 @@
     text: SettingsText,
     sound: SettingsSound,
     advance: SettingsAdvance,
-    adventure: SettingsAdventure,
     history: SettingsHistory,
-    achievement: SettingsAchievement,
     character: SettingsCharacter,
     background: SettingsBackground,
     log: SettingsLog,
-    plugins: SettingsPlugins,
   };
   const currentTabComponent = computed(() => tabComponents[uiStore.currentSettingsTab]);
   // 转场方向：左滑下一项 → slide-left（新页从右进）；右滑上一项 → slide-right

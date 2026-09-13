@@ -26,16 +26,6 @@
         <p class="hidden whitespace-nowrap xl:block">{{ $t("nav.character") }}</p>
       </Button>
       <Button
-        ref="adventureBtn"
-        type="nav"
-        class="shrink-0"
-        icon="adventure"
-        @click="() => switchTab('adventure', 'adventureBtn')"
-        :class="{ active: uiStore.currentSettingsTab === 'adventure' }"
-      >
-        <p class="hidden whitespace-nowrap xl:block">{{ $t("nav.adventure") }}</p>
-      </Button>
-      <Button
         ref="textBtn"
         type="nav"
         class="shrink-0"
@@ -76,16 +66,6 @@
         <p class="hidden whitespace-nowrap xl:block">{{ $t("nav.history") }}</p>
       </Button>
       <Button
-        ref="achievementBtn"
-        type="nav"
-        class="shrink-0"
-        icon="achievement"
-        @click="() => switchTab('achievement', 'achievementBtn')"
-        :class="{ active: uiStore.currentSettingsTab === 'achievement' }"
-      >
-        <p class="hidden whitespace-nowrap xl:block">{{ $t("nav.achievement") }}</p>
-      </Button>
-      <Button
         ref="saveBtn"
         type="nav"
         class="shrink-0"
@@ -119,16 +99,6 @@
         :class="{ active: uiStore.currentSettingsTab === 'log' }"
       >
         <p class="hidden whitespace-nowrap xl:block">{{ $t("nav.log") }}</p>
-      </Button>
-      <Button
-        ref="pluginsBtn"
-        type="nav"
-        class="shrink-0"
-        icon="package"
-        @click="() => switchTab('plugins', 'pluginsBtn')"
-        :class="{ active: uiStore.currentSettingsTab === 'plugins' }"
-      >
-        <p class="hidden whitespace-nowrap xl:block">{{ $t("nav.plugins") }}</p>
       </Button>
     </nav>
     <Icon
@@ -169,13 +139,10 @@
   const petBtn = ref<ButtonRef | null>(null);
   const soundBtn = ref<ButtonRef | null>(null);
   const historyBtn = ref<ButtonRef | null>(null);
-  const achievementBtn = ref<ButtonRef | null>(null);
   const saveBtn = ref<ButtonRef | null>(null);
   const advanceBtn = ref<ButtonRef | null>(null);
   const updateBtn = ref<ButtonRef | null>(null);
-  const adventureBtn = ref<ButtonRef | null>(null);
   const logBtn = ref<ButtonRef | null>(null);
-  const pluginsBtn = ref<ButtonRef | null>(null);
 
   // 设置可重设的值（使用 ref 存储，确保响应式或跨函数访问）
   const oldRefName = ref("textBtn");
@@ -189,13 +156,10 @@
       petBtn,
       soundBtn,
       historyBtn,
-      achievementBtn,
       saveBtn,
       advanceBtn,
       updateBtn,
-      adventureBtn,
       logBtn,
-      pluginsBtn,
     }[currentRefName];
 
     if (buttonRef?.value?.$el) {
@@ -274,9 +238,6 @@
       case "history":
         activeButton = historyBtn.value;
         break;
-      case "achievement":
-        activeButton = achievementBtn.value;
-        break;
       case "save":
         activeButton = saveBtn.value;
         break;
@@ -286,14 +247,8 @@
       case "update":
         activeButton = updateBtn.value;
         break;
-      case "adventure":
-        activeButton = adventureBtn.value;
-        break;
       case "log":
         activeButton = logBtn.value;
-        break;
-      case "plugins":
-        activeButton = pluginsBtn.value;
         break;
     }
 

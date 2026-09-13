@@ -662,5 +662,51 @@ pub fn build_config_tree(app: &AppHandle) -> ConfigTree {
         );
     }
 
+    // ===== DS娘 自有功能（本 fork 新增） =====
+    {
+        let mut ds_subs = BTreeMap::new();
+        ds_subs.insert(
+            "DS娘功能".to_string(),
+            Subcategory {
+                description: "本 fork 自有能力，默认开启，可随时关闭".to_string(),
+                settings: vec![
+                    ConfigSetting {
+                        key: keys::DS_EMOTION_FALLBACK.to_string(),
+                        value: read_setting(app, keys::DS_EMOTION_FALLBACK, "true"),
+                        description: "DS_EMOTION_FALLBACK — 关键词表认不出情绪时，用自训练小模型再判一次；关闭后直接显示「正常」"
+                            .to_string(),
+                        setting_type: "bool".to_string(),
+                    },
+                    ConfigSetting {
+                        key: keys::DS_CLOUD_SYNC.to_string(),
+                        value: read_setting(app, keys::DS_CLOUD_SYNC, "true"),
+                        description: "DS_CLOUD_SYNC — 启动时与每轮对话完成后，静默同步记忆/待办/日志到云端记忆中枢"
+                            .to_string(),
+                        setting_type: "bool".to_string(),
+                    },
+                    ConfigSetting {
+                        key: keys::DS_CLOUD_URL.to_string(),
+                        value: read_setting(app, keys::DS_CLOUD_URL, "https://whale-girl-cloud.pages.dev"),
+                        description: "DS_CLOUD_URL — 云端记忆中枢地址".to_string(),
+                        setting_type: "text".to_string(),
+                    },
+                    ConfigSetting {
+                        key: keys::DS_CLOUD_TOKEN.to_string(),
+                        value: read_setting(app, keys::DS_CLOUD_TOKEN, ""),
+                        description: "DS_CLOUD_TOKEN — 云端配对令牌（与记忆中枢 WHALE_TOKEN 一致；留空则不同步）"
+                            .to_string(),
+                        setting_type: "text".to_string(),
+                    },
+                ],
+            },
+        );
+        tree.insert(
+            "DS娘".to_string(),
+            Category {
+                subcategories: ds_subs,
+            },
+        );
+    }
+
     tree
 }

@@ -174,3 +174,14 @@ pub const CAST_DIALOG_FONT_SIZE: &str = "cast.dialog_font_size";
 pub const CAST_DIALOG_BG_OPACITY: &str = "cast.dialog_bg_opacity";
 /// 投屏隐藏对话框（默认 false）：开启后对话层整层 display:none，只保留背景与角色舞台。
 pub const CAST_DIALOG_HIDDEN: &str = "cast.dialog_hidden";
+
+// ========== DS娘 自有功能（本 fork 新增，v0.4） ==========
+/// 情绪兜底：关键词表认不出情绪时，是否用自训练小模型（emotion-small）再判一次（默认开）。
+/// 关掉后：关键词表认不出就直接显示「正常」。
+pub const DS_EMOTION_FALLBACK: &str = "ds.emotion_fallback";
+/// 云同步总开关：启动时 + 每轮对话完成后，静默同步 记忆/待办/日志 到云端记忆中枢（默认开）。
+pub const DS_CLOUD_SYNC: &str = "ds.cloud_sync";
+/// 云端记忆中枢地址（默认我们的 Cloudflare Worker）。
+pub const DS_CLOUD_URL: &str = "ds.cloud_url";
+/// 云端配对令牌（与记忆中枢的 WHALE_TOKEN 一致；由 CI Secret 在下发时写入，不写进仓库）。
+pub const DS_CLOUD_TOKEN: &str = "ds.cloud_token";

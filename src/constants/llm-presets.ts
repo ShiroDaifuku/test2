@@ -23,10 +23,10 @@ export interface LlmPreset {
 
 export const llmPresets: LlmPreset[] = [
   {
-    key: "deepseek-v4-flash",
-    label: "DeepSeek V4 Flash",
+    key: "deepseek-flash",
+    label: "DeepSeek Flash",
     provider: "openai",
-    model: "deepseek-v4-flash",
+    model: "deepseek-flash",
     base_url: "https://api.deepseek.com",
   },
   {

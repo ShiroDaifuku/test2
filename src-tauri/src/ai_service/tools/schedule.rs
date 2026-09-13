@@ -229,7 +229,7 @@ impl Tool for UpdateTodo {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::new(
             "schedule_update_todo",
-            "按 ID 更新待办事项的完成状态、内容或优先级，至少提供一项",
+            "按 ID 更新待办事项的完成状态、内容、优先级或截止时间，至少提供一项",
             json!({
                 "type": "object",
                 "properties": {
@@ -237,6 +237,7 @@ impl Tool for UpdateTodo {
                     "done": {"type": "boolean", "description": "是否已完成，可选"},
                     "text": {"type": "string", "description": "新的待办内容，可选"},
                     "priority": {"type": "integer", "description": "新的优先级，可选"},
+                    "deadline": {"type": "string", "description": "新的截止时间，例如 2026-09-20 或 20:30；传空字符串表示清除截止时间"},
                     "group": {"type": "string", "description": "分组名；旧数据 ID 重复时必须提供"}
                 },
                 "required": ["id"],
@@ -257,10 +258,13 @@ impl Tool for UpdateTodo {
         let done = obj.get("done").and_then(Value::as_bool);
         let text = obj.get("text").and_then(Value::as_str).map(str::to_string);
         let priority = optional_i32(obj, "priority", "schedule_update_todo")?;
+        // DS娘 v0.4 补的"改期"能力：LingChat 原版没有 deadline 写入方（schema 里也没有），
+        // 只能靠改写 text 来"改期"。这里补上，空字符串表示清除。
+        let deadline = obj.get("deadline").and_then(Value::as_str).map(str::to_string);
         let requested_group = obj.get("group").and_then(Value::as_str);
-        if done.is_none() && text.is_none() && priority.is_none() {
+        if done.is_none() && text.is_none() && priority.is_none() && deadline.is_none() {
             return Err(ToolError::InvalidArguments(
-                "schedule_update_todo 至少需要 done/text/priority 中的一项".into(),
+                "schedule_update_todo 至少需要 done/text/priority/deadline 中的一项".into(),
             ));
         }
 
@@ -286,6 +290,10 @@ impl Tool for UpdateTodo {
         }
         if let Some(p) = priority {
             todo.priority = p;
+        }
+        if let Some(dl) = deadline {
+            let trimmed = dl.trim();
+            todo.deadline = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
         }
 
         save_schedule_settings(&settings).map_err(ToolError::Execution)?;

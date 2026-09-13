@@ -50,7 +50,6 @@
         </button>
       </div>
     </MenuItem>
-    <RoleArchiveProgress />
 
     <!-- 打开文件夹依赖桌面端文件管理器，移动端不可用（open_folder 无 Android 分支），整卡隐藏 -->
     <MenuItem v-if="!isAndroid()" :title="$t('settings.character.openFolder.title')" size="small">
@@ -60,31 +59,6 @@
       <div class="space-y-2">
         <Button type="big" @click="openCharacterFolder">{{
           $t("settings.character.openFolder.button")
-        }}</Button>
-      </div>
-    </MenuItem>
-
-    <MenuItem :title="$t('settings.character.import.title')" size="small">
-      <template #header>
-        <PackageOpen :size="20" />
-      </template>
-      <div class="space-y-2">
-        <div class="flex flex-col gap-1.5">
-          <label class="text-xs font-medium text-white/60">{{
-            $t("settings.character.import.conflictPolicy")
-          }}</label>
-          <select
-            v-model="conflictPolicy"
-            class="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-white
-              transition-all duration-200 outline-none"
-          >
-            <option value="rename">{{ $t("settings.character.import.policyRename") }}</option>
-            <option value="skip">{{ $t("settings.character.import.policySkip") }}</option>
-            <option value="overwrite">{{ $t("settings.character.import.policyOverwrite") }}</option>
-          </select>
-        </div>
-        <Button type="big" @click="handleImport">{{
-          $t("settings.character.import.button")
         }}</Button>
       </div>
     </MenuItem>
@@ -113,7 +87,7 @@
   import { onMounted, ref, watch } from "vue";
   import { useI18n } from "vue-i18n";
   import { useRouter } from "vue-router";
-  import { Birdhouse, FolderOpen, PackageOpen, Rabbit, RefreshCcw } from "lucide-vue-next";
+  import { Birdhouse, FolderOpen, Rabbit, RefreshCcw } from "lucide-vue-next";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import { invoke } from "@tauri-apps/api/core";
 
@@ -121,14 +95,9 @@
   import { Button } from "../../base";
   import { MenuItem, MenuPage } from "../../ui";
   import { characterGetAll } from "../../../api/services/character";
-  import { useRoleImportExport } from "../../../composables/useRoleImportExport";
-  import type { ConflictPolicy } from "../../../api/services/role-archive";
   import { useGameStore } from "../../../stores/modules/game";
-  import { useUIStore } from "../../../stores/modules/ui/ui";
-  import { useDialogStore } from "../../../stores/modules/ui/dialog";
   import type { Character as ApiCharacter, Clothes } from "../../../types";
   import { isAndroid } from "@/utils/platform";
-  import RoleArchiveProgress from "@/components/ui/RoleArchiveProgress.vue";
 
   interface CharacterCardData {
     id: number;
@@ -146,9 +115,7 @@
   const currentPage = ref(1);
   const totalPages = ref(1);
   const gameStore = useGameStore();
-  const uiStore = useUIStore();
   const router = useRouter();
-  const dialogStore = useDialogStore();
   const { t } = useI18n();
 
   const mapCharacter = (char: ApiCharacter): CharacterCardData => {
@@ -212,28 +179,14 @@
     await fetchCharacters(page);
   };
 
-  const { pickAndImport, rescan } = useRoleImportExport();
-
-  const conflictPolicy = ref<ConflictPolicy>("rename");
-
+  // 刷新角色列表（重新拉取后端数据）
   const refreshCharacters = async (): Promise<void> => {
-    try {
-      await rescan();
-    } catch (e) {
-      console.error("刷新角色列表失败:", e);
-    }
     await loadCharacters();
   };
 
   const openCreativeWeb = async (): Promise<void> => {
     // 云端创意工坊已迁移为主菜单「创意工坊」二级菜单的独立路由页
     router.push("/workshop");
-  };
-
-  const handleImport = async () => {
-    await pickAndImport(conflictPolicy.value);
-    // After import dialog closes (success or cancel), refresh list
-    await refreshCharacters();
   };
 
   const openCharacterFolder = async () => {

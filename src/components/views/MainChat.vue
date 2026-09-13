@@ -24,24 +24,11 @@
       >
         <h3 class="hidden xl:block">{{ $t("views.mainChat.auto") }}</h3>
       </Button>
-      <!-- 桌宠模式依赖 Windows 透明置顶窗口与 hit-test（lib.rs 为 cfg(windows)），仅 Windows 可用 -->
-      <Button
-        v-if="isWindows()"
-        type="nav"
-        icon="character"
-        @click="goToPetMode"
-        v-show="uiStore.showSettings !== true"
-      >
-        <h3 class="hidden xl:block">{{ $t("views.mainChat.pet") }}</h3>
-      </Button>
       <Button type="nav" icon="text" @click="openSettings" v-show="uiStore.showSettings !== true">
         <h3 class="hidden xl:block">{{ $t("views.mainChat.menu") }}</h3>
       </Button>
     </div>
     <GameExtraUI />
-
-    <!-- Android 拍照 / 相册来源选择 sheet,见 useImageSourcePicker. 仅 chat 路由可见(PetMode 在手机上已停用) -->
-    <ImageSourcePicker />
 
     <!-- 首次加载过渡动画（覆盖在主界面上方，主界面在后台并行初始化） -->
     <LoadingTransition v-if="showLoading" @complete="onLoadingComplete" />
@@ -63,7 +50,6 @@
   import LoadingTransition from "./LoadingTransition.vue";
 
   import FullAccessWarning from "@/components/tools/FullAccessWarning.vue";
-  import ImageSourcePicker from "@/components/ui/ImageSourcePicker.vue";
   import { isWindows } from "@/utils/platform";
   import { useSettingsStore } from "../../stores/modules/settings";
   import GameExtraUI from "../game/standard/GameExtraUI.vue";
@@ -104,10 +90,6 @@
     .catch(() => {
       // 读取失败（键不存在等）按默认行为播放开屏动画
     });
-
-  const goToPetMode = () => {
-    router.push("/pet");
-  };
 
   const gameDialogRef = ref<InstanceType<typeof GameDialog> | null>(null);
   const menuPanelRef = ref<HTMLElement | null>(null);

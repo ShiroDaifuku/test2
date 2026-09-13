@@ -11,7 +11,6 @@
       <Cat :size="20" />
     </div>
     <div class="absolute top-3 right-3 z-10 flex items-center gap-2">
-      <RoleExportMenu :role-id="id" :role-name="name" />
       <button
         class="flex items-center justify-center rounded-full bg-black/5 p-1 text-white/60
           transition-all hover:rotate-90 hover:bg-white/10 hover:text-white"
@@ -40,7 +39,6 @@
       <h4 class="text-md text-center font-bold tracking-wide text-white drop-shadow-md">
         {{ title }}
       </h4>
-      <PluginTag :source="source" />
     </div>
 
     <div class="flex h-full min-h-36 flex-1 flex-col justify-between pl-4">
@@ -229,8 +227,6 @@
   import { invoke } from "@tauri-apps/api/core";
   import { Icon } from "../../base";
   import SettingsCharacterInfo from "@/components/settings/pages/SettingsCharacterInfo.vue";
-  import RoleExportMenu from "@/components/ui/RoleExportMenu.vue";
-  import PluginTag from "@/components/ui/PluginTag.vue";
   import {
     selectCharacter as selectCharacterApi,
     selectClothes as selectClothesApi,

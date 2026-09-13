@@ -137,17 +137,6 @@
                 </div>
               </div>
 
-              <Live2DSettings
-                v-if="activeTab === 'live2d' && props.roleId"
-                v-model="localSettings.live2d"
-                :role-id="props.roleId"
-                :character-folder="localSettings.character_folder || ''"
-                :clothes="clothesList"
-                :scale="Number(localSettings.scale) || 1"
-                :offset-x="Number(localSettings.offset_x) || 0"
-                :offset-y="Number(localSettings.offset_y) || 0"
-              />
-
               <!-- Clothes Tab (custom UI, outside data-driven block) -->
               <div v-if="activeTab === 'clothes'" class="space-y-4">
                 <div class="flex items-center justify-between">
@@ -290,7 +279,7 @@
 </template>
 
 <script setup lang="ts">
-  import { computed, onUnmounted, ref, toRaw, watch } from "vue";
+  import { computed, onUnmounted, ref, watch } from "vue";
   import { useI18n } from "vue-i18n";
   import {
     deleteCharacter as deleteCharacterApi,
@@ -298,13 +287,10 @@
     updateRoleSettings,
   } from "../../../api/services/character";
   import { Icon } from "../../base";
-  import Live2DSettings from "../character/Live2DSettings.vue";
   import { isSystemProtectedRole } from "@/constants/character";
   import { useDialogStore } from "../../../stores/modules/ui/dialog";
   import { useGameStore } from "@/stores/modules/game";
   import { useUIStore } from "@/stores/modules/ui/ui";
-  import * as TtsLocal from "../../../api/services/tts/tts-local";
-  import * as TtsCosyvoice from "../../../api/services/tts/tts-cosyvoice";
 
   const props = defineProps<{
     visible: boolean;
@@ -325,8 +311,6 @@
   const uiStore = useUIStore();
   const gameStore = useGameStore();
   const localSettings = ref<any>({});
-  const installedVoices = ref<TtsLocal.VoiceRecord[]>([]);
-  const cloudVoices = ref<TtsCosyvoice.CosyVoiceView[]>([]);
 
   // 删除按钮可用性：系统保护角色 / 在场角色不可删
   const deleteState = computed(() => {
@@ -387,51 +371,13 @@
     }
   };
 
-  async function refreshLocalVoices(): Promise<void> {
-    try {
-      const snapshot = await TtsLocal.listInstalled();
-      installedVoices.value = snapshot.voices;
-    } catch (error) {
-      console.warn("refreshLocalVoices failed", error);
-      installedVoices.value = [];
-    }
-  }
-
-  async function refreshCloudVoices(): Promise<void> {
-    try {
-      cloudVoices.value = await TtsCosyvoice.listVoices();
-    } catch (error) {
-      console.warn("refreshCloudVoices failed", error);
-      cloudVoices.value = [];
-    }
-  }
-
   const tabs = computed(() => [
     { id: "basic", label: t("settings.characterInfo.tabs.basic") },
     { id: "prompts", label: t("settings.characterInfo.tabs.prompts") },
     { id: "visuals", label: t("settings.characterInfo.tabs.visuals") },
     { id: "clothes", label: t("settings.characterInfo.tabs.clothes") },
-    { id: "live2d", label: t("settings.characterInfo.tabs.live2d") },
     { id: "pet", label: t("settings.characterInfo.tabs.pet") },
-    { id: "voice", label: t("settings.characterInfo.tabs.voice") },
   ]);
-
-  const voiceModelKeys = [
-    "sva_speaker_id",
-    "sbv2_name",
-    "sbv2_speaker_id",
-    "bv2_speaker_id",
-    "sbv2api_name",
-    "sbv2api_speaker_id",
-    "gsv_voice_text",
-    "gsv_voice_filename",
-    "gsv_gpt_model_name",
-    "gsv_sovits_model_name",
-    "aivis_model_uuid",
-    "opentts_voice",
-    "fish_s2_voice",
-    "cosyvoice_voice_id",
-  ] as const;
 
   // --- Schema Definition ---
 
@@ -454,7 +400,6 @@
     // Dynamic options computed from refs/state. Overrides options when set.
     dynamicOptions?: () => { label: string; value: string }[];
     visibleIf?: (settings: any) => boolean;
-    isVoiceModel?: boolean;
     realtime?: boolean;
     // When set, the field reads/writes into localSettings.value[parent][key].
     // The parent object is auto-initialised to {} on first write if missing.
@@ -548,315 +493,6 @@
         step: "0.1",
       },
     ],
-    voice: [
-      {
-        key: "tts_type",
-        label: t("settings.characterInfo.fields.ttsType"),
-        type: "select",
-        realtime: true,
-        options: [
-          { label: "sva", value: "sva" },
-          { label: "sbv2", value: "sbv2" },
-          { label: "bv2", value: "bv2" },
-          { label: "sbv2api", value: "sbv2api" },
-          { label: "gsv", value: "gsv" },
-          { label: "aivis", value: "aivis" },
-          { label: "opentts", value: "opentts" },
-          { label: t("settings.characterInfo.fields.fishS2"), value: "fishs2" },
-          { label: t("settings.characterInfo.fields.localSbv2Api"), value: "localsbv2api" },
-          { label: "indextts2", value: "indextts2" },
-          { label: t("settings.characterInfo.fields.voiceCloneTts"), value: "cosyvoice" },
-        ],
-      },
-
-      {
-        key: "voice_lang",
-        label: t("settings.characterInfo.fields.voiceLang"),
-        type: "select",
-        realtime: true,
-        options: [
-          // 顺序:中、英、日、德、法、俄、韩、葡(用户指定);es/ar 仅 indextts2 可见
-          { label: t("settings.characterInfo.voiceLangOptions.zh"), value: "zh" },
-          {
-            label: t("settings.characterInfo.voiceLangOptions.en"),
-            value: "en",
-            visibleIf: (s) =>
-              ["gsv", "opentts", "sbv2", "sbv2api", "indextts2", "fishs2", "cosyvoice"].includes(
-                s.tts_type
-              ),
-          },
-          { label: t("settings.characterInfo.voiceLangOptions.ja"), value: "ja" },
-          {
-            label: t("settings.characterInfo.voiceLangOptions.de"),
-            value: "de",
-            visibleIf: (s) => s.tts_type === "cosyvoice",
-          },
-          {
-            label: t("settings.characterInfo.voiceLangOptions.fr"),
-            value: "fr",
-            visibleIf: (s) => s.tts_type === "cosyvoice",
-          },
-          {
-            label: t("settings.characterInfo.voiceLangOptions.ru"),
-            value: "ru",
-            visibleIf: (s) => s.tts_type === "cosyvoice",
-          },
-          {
-            label: t("settings.characterInfo.voiceLangOptions.ko"),
-            value: "ko",
-            visibleIf: (s) => ["gsv", "opentts", "cosyvoice"].includes(s.tts_type),
-          },
-          {
-            label: t("settings.characterInfo.voiceLangOptions.pt"),
-            value: "pt",
-            visibleIf: (s) => s.tts_type === "cosyvoice",
-          },
-          {
-            label: t("settings.characterInfo.voiceLangOptions.es"),
-            value: "es",
-            visibleIf: (s) => s.tts_type === "indextts2",
-          },
-          {
-            label: t("settings.characterInfo.voiceLangOptions.ar"),
-            value: "ar",
-            visibleIf: (s) => s.tts_type === "indextts2",
-          },
-        ],
-      },
-
-      {
-        // 中文方言:仅语音克隆TTS + 中文时可选
-        // （v3.5-flash 官方支持的 16 种方言:普通话 + 广东/东北/甘肃/贵州/河南/湖北/江西/
-        //   闽南/宁夏/山西/陕西/山东/上海/四川/天津/云南）
-        key: "voice_dialect",
-        label: t("settings.characterInfo.fields.voiceDialect"),
-        type: "select",
-        realtime: true,
-        options: [
-          { label: t("settings.characterInfo.dialectOptions.mandarin"), value: "" },
-          { label: t("settings.characterInfo.dialectOptions.cantonese"), value: "广东话" },
-          { label: t("settings.characterInfo.dialectOptions.dongbei"), value: "东北话" },
-          { label: t("settings.characterInfo.dialectOptions.gansu"), value: "甘肃话" },
-          { label: t("settings.characterInfo.dialectOptions.guizhou"), value: "贵州话" },
-          { label: t("settings.characterInfo.dialectOptions.henan"), value: "河南话" },
-          { label: t("settings.characterInfo.dialectOptions.hubei"), value: "湖北话" },
-          { label: t("settings.characterInfo.dialectOptions.jiangxi"), value: "江西话" },
-          { label: t("settings.characterInfo.dialectOptions.fujian"), value: "闽南话" },
-          { label: t("settings.characterInfo.dialectOptions.ningxia"), value: "宁夏话" },
-          { label: t("settings.characterInfo.dialectOptions.shanxi"), value: "山西话" },
-          { label: t("settings.characterInfo.dialectOptions.shaanxi"), value: "陕西话" },
-          { label: t("settings.characterInfo.dialectOptions.shandong"), value: "山东话" },
-          { label: t("settings.characterInfo.dialectOptions.shanghai"), value: "上海话" },
-          { label: t("settings.characterInfo.dialectOptions.sichuan"), value: "四川话" },
-          { label: t("settings.characterInfo.dialectOptions.tianjin"), value: "天津话" },
-          { label: t("settings.characterInfo.dialectOptions.yunnan"), value: "云南话" },
-        ],
-        visibleIf: (s) => s.tts_type === "cosyvoice" && s.voice_lang === "zh",
-      },
-
-      {
-        key: "sva_speaker_id",
-        label: "sva_speaker_id",
-        type: "text",
-        isVoiceModel: true,
-        visibleIf: (s) => s.tts_type === "sva",
-      },
-
-      {
-        key: "sbv2_name",
-        label: "sbv2_name",
-        type: "text",
-        isVoiceModel: true,
-        realtime: true,
-        visibleIf: (s) => s.tts_type === "sbv2",
-      },
-      {
-        key: "sbv2_speaker_id",
-        label: "sbv2_speaker_id",
-        type: "text",
-        isVoiceModel: true,
-        realtime: true,
-        visibleIf: (s) => s.tts_type === "sbv2",
-      },
-
-      {
-        key: "bv2_speaker_id",
-        label: "bv2_speaker_id",
-        type: "text",
-        isVoiceModel: true,
-        visibleIf: (s) => s.tts_type === "bv2",
-      },
-
-      {
-        key: "sbv2api_name",
-        label: "sbv2api_name",
-        type: "text",
-        isVoiceModel: true,
-        realtime: true,
-        visibleIf: (s) => s.tts_type === "sbv2api",
-      },
-      {
-        key: "sbv2api_speaker_id",
-        label: "sbv2api_speaker_id",
-        type: "text",
-        isVoiceModel: true,
-        realtime: true,
-        visibleIf: (s) => s.tts_type === "sbv2api",
-      },
-
-      {
-        key: "gsv_voice_text",
-        label: "gsv_voice_text",
-        type: "text",
-        isVoiceModel: true,
-        realtime: true,
-        visibleIf: (s) => s.tts_type === "gsv",
-      },
-      {
-        key: "gsv_voice_filename",
-        label: "gsv_voice_filename",
-        type: "text",
-        isVoiceModel: true,
-        realtime: true,
-        visibleIf: (s) => s.tts_type === "gsv",
-      },
-      {
-        key: "gsv_gpt_model_name",
-        label: "gsv_gpt_model_name",
-        type: "text",
-        isVoiceModel: true,
-        realtime: true,
-        visibleIf: (s) => s.tts_type === "gsv",
-      },
-      {
-        key: "gsv_sovits_model_name",
-        label: "gsv_sovits_model_name",
-        type: "text",
-        isVoiceModel: true,
-        realtime: true,
-        visibleIf: (s) => s.tts_type === "gsv",
-      },
-
-      {
-        key: "opentts_voice",
-        label: t("settings.characterInfo.fields.openttsVoice"),
-        type: "text",
-        isVoiceModel: true,
-        realtime: true,
-        placeholder: t("settings.characterInfo.placeholders.openttsVoice"),
-        visibleIf: (s) => s.tts_type === "opentts",
-      },
-
-      {
-        key: "aivis_model_uuid",
-        label: "aivis_model_uuid",
-        type: "text",
-        isVoiceModel: true,
-        visibleIf: (s) => s.tts_type === "aivis",
-      },
-
-      {
-        key: "fish_s2_voice",
-        label: t("settings.characterInfo.fields.fishS2Voice"),
-        type: "text",
-        isVoiceModel: true,
-        realtime: true,
-        placeholder: t("settings.characterInfo.placeholders.fishS2Voice"),
-        visibleIf: (s) => s.tts_type === "fishs2",
-      },
-
-      // --- 云端语音克隆 (cosyvoice) ---
-      {
-        key: "cosyvoice_voice_id",
-        parent: "voice_models",
-        label: t("settings.characterInfo.fields.cosyVoiceVoice"),
-        type: "select",
-        realtime: true,
-        dynamicOptions: () =>
-          cloudVoices.value.length === 0
-            ? [{ label: t("settings.characterInfo.fields.noCloudVoice"), value: "" }]
-            : cloudVoices.value.map((voice) => ({
-                label: voice.name ? `${voice.name} (${voice.voice_id})` : voice.voice_id,
-                value: voice.voice_id,
-              })),
-        visibleIf: (s) => s.tts_type === "cosyvoice",
-      },
-
-      // --- Local SBV2 (localsbv2api) ---
-      {
-        key: "sbv2_local_voice_id",
-        parent: "voice_models",
-        label: t("settings.characterInfo.fields.localVoiceId"),
-        type: "select",
-        dynamicOptions: () =>
-          installedVoices.value.length === 0
-            ? [{ label: t("settings.characterInfo.fields.noLocalModel"), value: "" }]
-            : installedVoices.value.map((voice) => ({
-                label: voice.display_name
-                  ? `${voice.display_name} (${voice.voice_id})`
-                  : voice.voice_id,
-                value: voice.voice_id,
-              })),
-        visibleIf: (s) => s.tts_type === "localsbv2api",
-      },
-      {
-        key: "sbv2_local_speaker_id",
-        parent: "voice_models",
-        label: t("settings.characterInfo.fields.speakerId"),
-        type: "number",
-        step: "1",
-        visibleIf: (s) => s.tts_type === "localsbv2api",
-      },
-      {
-        key: "sbv2_local_style_id",
-        parent: "voice_models",
-        label: t("settings.characterInfo.fields.styleId"),
-        type: "number",
-        step: "1",
-        visibleIf: (s) => s.tts_type === "localsbv2api",
-      },
-      {
-        key: "sbv2_local_length_scale",
-        parent: "voice_models",
-        label: t("settings.characterInfo.fields.lengthScale"),
-        type: "number",
-        step: "0.05",
-        visibleIf: (s) => s.tts_type === "localsbv2api",
-      },
-      {
-        key: "sbv2_local_sdp_ratio",
-        parent: "voice_models",
-        label: t("settings.characterInfo.fields.sdpRatio"),
-        type: "number",
-        step: "0.05",
-        visibleIf: (s) => s.tts_type === "localsbv2api",
-      },
-      {
-        key: "sbv2_local_cloud_fallback_model",
-        parent: "voice_models",
-        label: t("settings.characterInfo.fields.cloudFallbackModel"),
-        type: "text",
-        placeholder: t("settings.characterInfo.fields.cloudFallbackPlaceholder"),
-        visibleIf: (s) => s.tts_type === "localsbv2api",
-      },
-      {
-        key: "sbv2_local_cloud_fallback_speaker_id",
-        parent: "voice_models",
-        label: t("settings.characterInfo.fields.cloudFallbackSpeakerId"),
-        type: "text",
-        placeholder: t("settings.characterInfo.fields.cloudFallbackPlaceholder"),
-        visibleIf: (s) => s.tts_type === "localsbv2api",
-      },
-      {
-        key: "opentts_voice",
-        label: t("settings.characterInfo.fields.openttsVoiceLabel"),
-        type: "text",
-        isVoiceModel: true,
-        realtime: true,
-        placeholder: t("settings.characterInfo.fields.openttsVoicePlaceholder"),
-        visibleIf: (s) => s.tts_type === "opentts",
-      },
-    ],
   }));
 
   // --- Computed Properties ---
@@ -870,28 +506,6 @@
     return fields.filter((field) => !field.visibleIf || field.visibleIf(localSettings.value));
   });
 
-  const ensureVoiceModels = () => {
-    if (
-      !localSettings.value.voice_models ||
-      typeof localSettings.value.voice_models !== "object" ||
-      Array.isArray(localSettings.value.voice_models)
-    ) {
-      localSettings.value.voice_models = {};
-    }
-    return localSettings.value.voice_models as Record<string, unknown>;
-  };
-
-  const migrateLegacyVoiceModelFields = () => {
-    const voiceModels = ensureVoiceModels();
-    for (const key of voiceModelKeys) {
-      const legacyValue = localSettings.value[key];
-      if ((voiceModels[key] === undefined || voiceModels[key] === null) && legacyValue != null) {
-        voiceModels[key] = legacyValue;
-      }
-      delete localSettings.value[key];
-    }
-  };
-
   const fieldModel = (field: FieldSchema) => {
     return computed({
       get: () => {
@@ -902,8 +516,6 @@
             parentObj && typeof parentObj === "object"
               ? parentObj
               : (localSettings.value[field.parent] = {});
-        } else if (field.isVoiceModel) {
-          target = ensureVoiceModels();
         } else {
           target = localSettings.value;
         }
@@ -920,8 +532,6 @@
             localSettings.value[field.parent] = {};
           }
           target = localSettings.value[field.parent];
-        } else if (field.isVoiceModel) {
-          target = ensureVoiceModels();
         } else {
           target = localSettings.value;
         }
@@ -968,33 +578,12 @@
         try {
           const data = await getRoleSettings(props.roleId);
           localSettings.value = JSON.parse(JSON.stringify(data));
-          migrateLegacyVoiceModelFields();
-          if (!localSettings.value.voice_lang) {
-            localSettings.value.voice_lang = "ja";
-          }
         } catch (e) {
           console.error("Failed to load character settings", e);
           emit("close");
         } finally {
           loading.value = false;
         }
-      }
-    }
-  );
-
-  // Refresh installed local voices whenever the voice tab is shown while the
-  // dialog is visible. The dropdown only matters when tts_type=localsbv2api,
-  // but loading early keeps things simple and the list is cheap to fetch.
-  watch(
-    () => [props.visible, activeTab.value, localSettings.value.tts_type],
-    ([visible, tab, ttsType]) => {
-      if (visible && tab === "voice") {
-        // 本地 TTS 音色:仅 localsbv2api 需要
-        if (ttsType === "localsbv2api") {
-          void refreshLocalVoices();
-        }
-        // 云端音色:cosyvoice 下拉随时需要（与 tts_type 无关）
-        void refreshCloudVoices();
       }
     }
   );
@@ -1041,12 +630,6 @@
     saving.value = true;
     try {
       await updateRoleSettings(props.roleId, localSettings.value);
-      const runtimeRole = gameStore.gameRoles[props.roleId];
-      if (runtimeRole) {
-        runtimeRole.live2d = localSettings.value.live2d
-          ? structuredClone(toRaw(localSettings.value.live2d))
-          : null;
-      }
       emit("saved");
       emit("close");
     } catch (e) {

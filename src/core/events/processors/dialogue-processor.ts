@@ -4,6 +4,9 @@ import type { ScriptDialogueEvent } from "../../../types";
 import { useGameStore } from "../../../stores/modules/game";
 import { useUIStore } from "../../../stores/modules/ui/ui";
 import { isJaLocale, hkify } from "@/locales";
+import { resolveEmotion } from "@/api/ds-emotion";
+import { recordChat } from "@/api/ds-silent-log";
+import { scheduleCloudSync } from "@/api/ds-cloud-sync";
 
 export default class DialogueProcessor implements IEventProcessor {
   canHandle(eventType: string): boolean {
@@ -27,6 +30,22 @@ export default class DialogueProcessor implements IEventProcessor {
     const displayName = event.displayName ? event.displayName : role.roleName;
     const displaySubtitle = event.displaySubtitle ? event.displaySubtitle : role.roleSubTitle;
 
+    // 情绪解析提前做一次：关键词表（Rust normalize_emotion_tag）命中就直接用，没命中时由本地小模型兜底，
+    // 兜底也认不出才回退「正常」。结果在消息记录、立绘、展示标签三处共用，保证三者一致。
+    // 放在角色校验之后：拿不到角色就直接 return，没必要为这一句去加载模型。
+    const finalEmotion = await resolveEmotion(event.emotion, event.originalTag, event.message);
+    // 兜底真正生效（解析结果与原标签不同）时，界面上的标签也要跟着立绘走，
+    // 否则会出现「标签写着正常、立绘却在生气」的错位。
+    const emotionFallbackApplied = finalEmotion !== event.emotion;
+
+    // DS娘 v0.4 静默日志：AI 台词与动作都落本地（带时间戳），不新增任何界面
+    // 记的是「最终情绪」（含小模型兜底结果），这样日志与当时界面上看到的立绘一致
+    if (event.message) {
+      recordChat({ role: "ai", text: event.message, emotion: finalEmotion, seq: event.userMessageSeq });
+    } else if (event.motionText) {
+      recordChat({ role: "action", text: event.motionText, seq: event.userMessageSeq });
+    }
+
     // 日文界面且存在日语译文时显示日语译文；繁体（香港）界面下对话转繁体显示
     const displayLine = hkify(isJaLocale() && event.ttsText ? event.ttsText : event.message || "");
     gameStore.currentLine = displayLine;
@@ -36,7 +55,7 @@ export default class DialogueProcessor implements IEventProcessor {
       type: "reply",
       displayName: displayName,
       content: event.message,
-      emotion: event.emotion,
+      emotion: finalEmotion,
       audioFile: event.audioFile,
       isFinal: event.isFinal,
       motionText: event.motionText,
@@ -59,8 +78,8 @@ export default class DialogueProcessor implements IEventProcessor {
     }
 
     uiStore.showCharacterLine = gameStore.currentLine; // TODO: 这部分逻辑之后整合
-    role.emotion = event.emotion || "正常";
-    role.originalEmotion = event.originalTag || "正常";
+    role.emotion = finalEmotion;
+    role.originalEmotion = emotionFallbackApplied ? finalEmotion : event.originalTag || "正常";
     gameStore.currentInteractRoleId = role.roleId;
     uiStore.currentAvatarAudio = event.audioFile || "None";
     // 前端触发对话/播放回复音频时，把该句语音广播给投屏客户端（远端设备同步播放）。
@@ -68,11 +87,16 @@ export default class DialogueProcessor implements IEventProcessor {
     if (event.audioFile) {
       invoke("cast_play_voice", { audioFile: event.audioFile }).catch(() => {});
     }
-    uiStore.showCharacterEmotion = role.originalEmotion;
+    // 兜底生效时展示标签也用最终情绪（此时 role.originalEmotion 已等于 finalEmotion），否则维持原样
+    uiStore.showCharacterEmotion = emotionFallbackApplied ? finalEmotion : role.originalEmotion;
 
     uiStore.showCharacterTitle = displayName;
     uiStore.showCharacterSubtitle = displaySubtitle;
     // gameStore.currentCharacter = event.character;
+
+    // DS娘 v0.4：本轮的收尾句到达 ⇒ 视为"一轮对话完成"，静默触发云同步
+    // （scheduleCloudSync 内部 3 秒防抖 + 失败静默，绝不会打断对话）
+    if (event.isFinal) scheduleCloudSync("dialogue");
 
     // 对话总是等待用户继续，所以这里不需要做任何等待
     // event-queue 会自动检测到这是对话事件并等待用户继续

@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from "fs";
 import { createHash } from "crypto";
-import { join, dirname, sep } from "path";
+import { join, dirname, sep, basename } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -62,6 +62,13 @@ try {
       console.log(`  Skipping ${relative}`);
       continue;
     }
+    // v0.4 减法：情绪分类器（iOS 不可用）与 ASR VAD（功能已删）不计入包体。
+    // 注意：它们是 git 跟踪文件，会先经过这段"git ls-files"复制，因此必须在这里也过滤，
+    // 否则下面 third_party 的跳过逻辑拦不住（首次构建实测残留 2.3MB）。
+    if (/data[\\/]third_party[\\/](emotion_model_19emo|asr_vad)[\\/]/.test(relative)) {
+      console.log(`  Skipping (v0.4 未使用): ${relative}`);
+      continue;
+    }
     // 去掉 data/ 前缀
     const rel = relative.replace(/^data[\\/]/, "");
     const dst = join(buildDir, rel);
@@ -74,11 +81,14 @@ try {
   console.warn("git ls-files failed, skipping data bundle:", e.message);
 }
 
-// --- 例外：始终包含 data/third_party/ ---
+// --- 例外：始终包含 data/third_party/（v0.4：跳过我们用不到的模型）---
+// DS娘 v0.4 减法：iOS 上情绪分类器不可用（走关键词白名单兜底），ASR 功能已整体删除，
+// 因此这两份模型不再随包，省掉数十 MB。
+const SKIP_THIRD_PARTY = ["emotion_model_19emo", "asr_vad"];
 const thirdParty = join(projectRoot, "data", "third_party");
 if (existsSync(thirdParty)) {
-  copyDirRecursive(thirdParty, join(buildDir, "third_party"));
-  console.log("Bundled data/third_party/ (exception)");
+  copyDirRecursive(thirdParty, join(buildDir, "third_party"), SKIP_THIRD_PARTY);
+  console.log("Bundled data/third_party/ (skipped: " + SKIP_THIRD_PARTY.join(", ") + ")");
 }
 
 // --- 生成 data_manifest.json（文件清单 + SHA256） ---
@@ -141,13 +151,15 @@ console.log("Cleaned up build directory");
 
 // --- 辅助函数 ---
 
-function copyDirRecursive(src, dst) {
+function copyDirRecursive(src, dst, skip = []) {
+  // 目录名命中 skip 则整棵子树跳过（v0.4：不再随包情绪模型与 ASR VAD）
+  if (skip.includes(basename(src))) return;
   mkdirSync(dst, { recursive: true });
   for (const entry of readdirSync(src)) {
     const srcPath = join(src, entry);
     const dstPath = join(dst, entry);
     if (statSync(srcPath).isDirectory()) {
-      copyDirRecursive(srcPath, dstPath);
+      copyDirRecursive(srcPath, dstPath, skip);
     } else {
       copyFileSync(srcPath, dstPath);
     }

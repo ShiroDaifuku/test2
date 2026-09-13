@@ -1,16 +1,5 @@
 <template>
-  <Live2DRolePresentation
-    v-if="role.live2d"
-    ref="presentationRef"
-    :role-id="role.roleId"
-    :src="targetAvatarUrl"
-    :layer-style="staticLayerStyle"
-    :animation-classes="containerClasses"
-    :object-fit="computedObjectFit"
-    @animation-end="handleAnimationEnd"
-  />
   <StaticRolePresentation
-    v-else
     ref="presentationRef"
     :src="targetAvatarUrl"
     :layer-style="staticLayerStyle"
@@ -19,7 +8,7 @@
     @animation-end="handleAnimationEnd"
   />
 
-  <!-- 原有气泡、触摸层和情绪音效位于共享 Pixi 舞台上方。 -->
+  <!-- 原有气泡、触摸层和情绪音效 -->
   <TouchAreas v-if="gameStore.command === 'touch'" :body-parts="role.bodyPart" />
   <div
     class="role-container-transition pointer-events-none absolute h-full w-full origin-[center_0%]"
@@ -38,7 +27,6 @@
   import { useUIStore } from "@/stores/modules/ui/ui";
   import { EMOTION_CONFIG, EMOTION_CONFIG_EMO } from "@/controllers/emotion/config";
   import type { GameRole } from "@/stores/modules/game/state";
-  import Live2DRolePresentation from "./Live2DRolePresentation.vue";
   import StaticRolePresentation from "./StaticRolePresentation.vue";
   import TouchAreas from "./TouchAreas.vue";
   import "./avatar-animation.css";
@@ -57,9 +45,7 @@
   const { role } = toRefs(props);
 
   const bubbleAudio = ref<HTMLAudioElement | null>(null);
-  const presentationRef = ref<
-    InstanceType<typeof Live2DRolePresentation> | InstanceType<typeof StaticRolePresentation> | null
-  >(null);
+  const presentationRef = ref<InstanceType<typeof StaticRolePresentation> | null>(null);
 
   const activeAnimationClass = ref("normal");
   const isBubbleVisible = ref(false);
