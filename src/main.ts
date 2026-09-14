@@ -18,6 +18,7 @@ import { autoConfigurePerformance } from "./api/services/cpu-perf";
 import { initAudioOutputManager } from "./utils/audioOutputManager";
 import { bootstrapDeepSeek } from "./api/ds-bootstrap";
 import { scheduleCloudSync } from "./api/ds-cloud-sync";
+import { initTodoReminders } from "./api/ds-todo-reminder";
 
 // 仅主窗口启动时清除加载过渡标记，避免设置窗口等其他窗口误清除
 if (getCurrentWindow().label === "main") {
@@ -47,6 +48,9 @@ void bootstrapDeepSeek();
 
 // DS娘 v0.4：启动时静默云同步（延迟 3 秒，避免和初始化抢资源；失败静默）
 setTimeout(() => scheduleCloudSync("startup"), 3000);
+
+// DS娘 v0.4：待办到点提醒（系统级通知；AI 改待办后由 Rust 事件即刻重排）
+initTodoReminders();
 
 // 初始化全局音频输出设备管理器（需 pinia 就绪）
 initAudioOutputManager();

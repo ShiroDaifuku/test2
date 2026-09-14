@@ -24,6 +24,10 @@ const DEEPSEEK_TIMEOUT: Duration = Duration::from_secs(45);
 const MAX_OUTPUT_CHARS: usize = 20_000;
 /// 搜索词长度上限，避免异常参数放大请求体、日志与第三方计费。
 const MAX_QUERY_CHARS: usize = 500;
+/// ── DS娘 v0.4 补丁 ── 判定"DeepSeek 确实读过网页"的输入 token 下限。
+/// 真搜索时网页正文会进上下文：实测 `deepseek-v4-pro` 为 10,650 / 47,037 / 59,073；
+/// 而没搜索时只有提示词本身：实测 `deepseek-flash` 系为 56 / 61。取 2000 留足余量。
+const DEEPSEEK_SEARCH_MIN_INPUT_TOKENS: u64 = 2_000;
 
 /// 网页搜索内置工具。
 pub struct WebSearchTool {
@@ -602,6 +606,34 @@ impl WebSearchTool {
             .unwrap_or_default();
 
         let answer = extract_deepseek_answer(&output);
+
+        // ── DS娘 v0.4 补丁（上游此处是"假成功"）────────────────────────────────
+        // DeepSeek Responses API 会把内置工具 `web_search` **静默忽略**（官方 Tools 兼容表把
+        // `web_search` 标为 Ignored，`tool_choice` 里的内置工具同样被丢弃，请求照样 200），
+        // 所以能不能真联网完全取决于模型自己带不带服务端搜索：
+        //   - `deepseek-v4-pro`   → web_search_call 1~8 条、input_tokens 1 万~5.9 万（真读了网页）
+        //   - `deepseek-flash` 系 → web_search_call 0 条、input_tokens 仅 ~60（一个网页都没读），
+        //                           模型只好凭训练记忆答、或把"我要搜索"写成一段 ```json``` 文本
+        // 上游只看"回答文本是否为空"就判定成功，于是 flash 下返回 ok:true + result_count:0
+        // （设置页显示"成功 · 0 条"），模型拿到那段文本只好回答"没搜到任何结果"。
+        // 这里改成：没有搜索动作 **且** 输入 token 少得不像读过网页 → 明确报错，让模型转告用户。
+        // 用 input_tokens 兜底是为了防字段改名：若将来 DeepSeek 换了 `web_search_call` 的名字
+        // 但仍在真搜索，input_tokens 依然很大，本守卫不会误报。
+        // 判定依据与复现脚本：`鲸鱼娘iOS/_diag/deepseek-search-probe.cjs`、`deepseek-search-harness.cjs`。
+        let search_actions = deepseek_search_action_count(&output);
+        let input_tokens = payload
+            .pointer("/usage/input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        if search_actions == 0 && input_tokens < DEEPSEEK_SEARCH_MIN_INPUT_TOKENS {
+            return Err(ToolError::Execution(format!(
+                "DeepSeek 没有真正执行联网搜索（搜索动作 0 条、输入仅 {input_tokens} tokens，\
+                 没有读到任何网页）。DeepSeek 的 Responses API 会静默忽略内置 web_search 工具，\
+                 只有自带服务端搜索的模型才会真的联网，请把「高级设置 → 工具配置 → 网页搜索 → \
+                 DeepSeek 模型」改成 deepseek-v4-pro（当前填的是 {model}）。"
+            )));
+        }
+
         if answer.trim().is_empty() {
             return Err(ToolError::Execution(
                 "DeepSeek 搜索未返回有效结果（可能没有触发 web_search）".into(),
@@ -613,7 +645,7 @@ impl WebSearchTool {
         Ok(serde_json::json!({
             "ok": true,
             "query": query,
-            "result_count": deepseek_search_action_count(&output),
+            "result_count": search_actions,
             "text": text,
         }))
     }

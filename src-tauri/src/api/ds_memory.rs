@@ -25,6 +25,8 @@
 use std::collections::HashSet;
 
 use serde_json::{json, Value};
+// `AppHandle::state()` 由 `Manager` trait 提供，必须显式导入（否则 E0599）
+use tauri::Manager;
 
 // 复用既有工具模块的笔记 I/O：可见性在 `ai_service/tools/memory.rs` 内改为
 // `pub(crate)`，行为未改动。这里只做命令层的类型转换。

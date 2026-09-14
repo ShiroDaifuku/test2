@@ -41,6 +41,8 @@ interface LocalTodo {
   priority: number;
   completed: boolean;
   deadline?: string;
+  /** 提醒时间（本地 "YYYY-MM-DD HH:MM"），到点发系统通知；随待办一起备份到云端 */
+  remindAt?: string;
 }
 
 interface LocalTodoGroup {
@@ -69,6 +71,11 @@ interface CloudSchedule {
   importance?: number;
   group?: string;
   doneAt?: string;
+  /**
+   * 提醒时间（DS娘 v0.4 本地字段）。Worker（`云端记忆中枢/_worker.js`，版本 v0.4-todo-remind）
+   * 会原样保存并在合并时保留它；推送时总是带上（空字符串表示清除提醒）。
+   */
+  remindAt?: string;
 }
 
 interface CloudMemory {
@@ -449,6 +456,9 @@ function flattenTodos(todoGroups: Record<string, LocalTodoGroup>): CloudSchedule
         status: todo.completed ? "done" : "todo",
         importance: Math.round(toNumber(todo.priority, 0)),
         ...(todo.deadline ? { date: String(todo.deadline) } : {}),
+        // 提醒时间总是带上（空字符串=没有提醒）：Worker 靠"字段是否存在"区分
+        // "用户清掉了提醒"和"老客户端根本没这个字段"
+        remindAt: String(todo.remindAt ?? ""),
         group: groupId,
       });
     }
@@ -466,18 +476,13 @@ function groupSchedules(
   for (const [groupId, group] of Object.entries(base || {})) {
     groups[groupId] = { ...group, todos: [] };
   }
-  // 保证合法的数字 id：云端新建的待办 id 可能是非数字，退化为「当前最大 id + 1」
+  // 注意：**不能**把本地已有 id 预先塞进 takenIds。
+  // 那样本地条目走到 pickId 时会发现自己"已被占用"，于是一律被重新编号，
+  // 结果是每同步一次本地 id 全变、下一次 pull 就认不出云端那几条 → 待办不断翻倍
+  // （`鲸鱼娘iOS/_diag/todo-id-stability-test.cjs` 复现：3 条 → 6 条）。
+  // `merged` 是本地优先排好序的，本地条目先认领自己的 id，云端独有的再来分配即可。
   const takenIds = new Set<number>();
-  for (const group of Object.values(base || {})) {
-    for (const todo of group?.todos || []) {
-      const n = Number(todo.id);
-      if (Number.isFinite(n)) takenIds.add(n);
-    }
-  }
   let nextId = 1;
-  for (const value of takenIds) {
-    if (value >= nextId) nextId = value + 1;
-  }
   const pickId = (raw: unknown): number => {
     const n = Number(raw);
     if (Number.isFinite(n) && n > 0 && !takenIds.has(n)) {
@@ -501,9 +506,53 @@ function groupSchedules(
       completed: item?.status === "done",
     };
     if (item?.date) todo.deadline = String(item.date);
+    // 云端没有这个字段时保留本地值（mergeById 是本地优先，本地条目本来就带着 remindAt）
+    if (item?.remindAt) todo.remindAt = String(item.remindAt);
     groups[groupId].todos.push(todo);
   }
   return groups;
+}
+
+/** 待办去重的一次性修复标记 */
+const TODO_DEDUPE_FLAG = "ds_todo_dedupe_v1";
+
+/**
+ * 一次性修复历史损伤：旧版 `groupSchedules` 会给本地待办重新编号，于是每同步一次
+ * 本地就多出一份完全相同的待办。这里把"内容/优先级/完成态/截止/提醒"完全相同的重复项各留一条。
+ * 只跑一次（localStorage 标记），避免误删用户刻意建的相同待办。
+ */
+function dedupeLocalTodosOnce(base: Record<string, LocalTodoGroup>): {
+  groups: Record<string, LocalTodoGroup>;
+  removed: number;
+} {
+  if (localStorage.getItem(TODO_DEDUPE_FLAG) === "1") return { groups: base, removed: 0 };
+  let removed = 0;
+  const groups: Record<string, LocalTodoGroup> = {};
+  for (const [groupId, group] of Object.entries(base || {})) {
+    const seen = new Set<string>();
+    const todos: LocalTodo[] = [];
+    for (const todo of group?.todos || []) {
+      const key = [
+        String(todo?.text ?? ""),
+        String(todo?.priority ?? ""),
+        todo?.completed ? "1" : "0",
+        String(todo?.deadline ?? ""),
+        String(todo?.remindAt ?? ""),
+      ].join("\u0001");
+      if (seen.has(key)) {
+        removed += 1;
+        continue;
+      }
+      seen.add(key);
+      todos.push(todo);
+    }
+    groups[groupId] = { ...group, todos };
+  }
+  localStorage.setItem(TODO_DEDUPE_FLAG, "1");
+  if (removed > 0) {
+    console.warn(`[DS娘·云同步] 清理历史重复待办 ${removed} 条（旧版同步逻辑会把待办复制一份）`);
+  }
+  return { groups, removed };
 }
 
 /**
@@ -513,7 +562,9 @@ function groupSchedules(
 function mergeTodos(cloudSchedule: CloudSchedule[]) {
   const cloudList = Array.isArray(cloudSchedule) ? cloudSchedule : [];
   return getSchedules().then((local) => {
-    const base = (local?.todoGroups || {}) as Record<string, LocalTodoGroup>;
+    const { groups: base, removed } = dedupeLocalTodosOnce(
+      (local?.todoGroups || {}) as Record<string, LocalTodoGroup>
+    );
     const localFlat = flattenTodos(base);
     const merged = mergeById<CloudSchedule>(localFlat, cloudList, (item) => String(item.id));
     const added = merged.length - localFlat.length;
@@ -522,6 +573,8 @@ function mergeTodos(cloudSchedule: CloudSchedule[]) {
       total: merged.length,
       /** 云端独有、被补进本地的条数 */
       added: added > 0 ? added : 0,
+      /** 顺手清掉的历史重复条数（只会有一次） */
+      removed,
     };
   });
 }

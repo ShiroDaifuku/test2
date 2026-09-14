@@ -64,6 +64,12 @@
               todo.groupTitle
             }}</span>
             <p class="font-bold text-cyan-50">{{ todo.text }}</p>
+            <span
+              v-if="todo.remindAt"
+              class="rounded bg-amber-100/90 px-1.5 py-0.5 text-[11px] font-bold text-amber-600"
+            >
+              ⏰ {{ formatRemind(todo.remindAt) }}
+            </span>
           </div>
           <div class="mt-1 flex items-center">
             <Star
@@ -156,6 +162,29 @@
             ]"
           />
         </div>
+        <!-- 提醒时间：点一下就地改（datetime-local），清空即取消提醒 -->
+        <input
+          v-if="remindEditingId === todo.id"
+          type="datetime-local"
+          :value="toInputValue(todo.remindAt)"
+          class="mt-1 rounded-lg border border-slate-200 bg-white/90 px-2 py-1 text-[11px]
+            text-slate-700"
+          @change="applyRemindEdit(todo, ($event.target as HTMLInputElement).value)"
+          @blur="remindEditingId = null"
+        />
+        <button
+          v-else
+          class="mt-1 rounded px-1.5 py-0.5 text-[11px] font-bold transition-colors"
+          :class="
+            todo.remindAt
+              ? 'bg-amber-100/90 text-amber-600 hover:bg-amber-200'
+              : 'text-cyan-600 hover:underline'
+          "
+          :title="$t('ui.todoPage.remindAtHint')"
+          @click.stop="remindEditingId = todo.id"
+        >
+          {{ todo.remindAt ? "⏰ " + formatRemind(todo.remindAt) : "⏰ " + $t("ui.todoPage.remindNone") }}
+        </button>
       </div>
       <button @click.stop="removeItem(idx)" class="p-2 text-slate-200 hover:text-red-400">
         <Trash2 />
@@ -203,6 +232,18 @@
           />
         </button>
       </div>
+      <div class="flex flex-col gap-1 rounded-2xl bg-slate-50 p-3">
+        <span class="text-xs font-bold text-slate-400 uppercase">{{
+          $t("ui.todoPage.remindAtLabel")
+        }}</span>
+        <input
+          type="datetime-local"
+          v-model="formData.remindAt"
+          class="w-full rounded-xl border-none bg-white px-3 py-2 text-sm text-slate-700 outline-none
+            focus:ring-2 focus:ring-cyan-500/50"
+        />
+        <span class="text-[11px] text-slate-400">{{ $t("ui.todoPage.remindAtHint") }}</span>
+      </div>
     </template>
   </BaseModal>
 </template>
@@ -238,6 +279,8 @@
     id: number;
     text: string;
     deadline?: string;
+    /** 提醒时间（本地 "YYYY-MM-DD HH:MM"）：到点发系统通知，见 api/ds-todo-reminder.ts */
+    remindAt?: string;
     priority: number;
     completed: boolean;
   }
@@ -380,7 +423,29 @@
     groupTitle: "",
     todoText: "",
     priority: 1,
+    /** datetime-local 的值（"YYYY-MM-DDTHH:MM"）；空表示不提醒 */
+    remindAt: "",
   });
+
+  // ─── 提醒时间（到点由 ds-todo-reminder.ts 发系统通知）───
+  /** 正在就地编辑提醒时间的那条待办 id（详情页点 ⏰ 进入编辑） */
+  const remindEditingId = ref<number | null>(null);
+  /** "YYYY-MM-DD HH:MM" → 列表里显示的 "MM-DD HH:MM" */
+  const formatRemind = (raw?: string) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(String(raw || "").trim());
+    return m ? `${m[2]}-${m[3]} ${m[4]}:${m[5]}` : "";
+  };
+  /** "YYYY-MM-DD HH:MM" → datetime-local 需要的 "YYYY-MM-DDTHH:MM" */
+  const toInputValue = (raw?: string) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(String(raw || "").trim());
+    return m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}` : "";
+  };
+  const applyRemindEdit = (todo: TodoItem, value: string) => {
+    const v = String(value || "").trim();
+    if (v) todo.remindAt = v.replace("T", " ");
+    else delete todo.remindAt;
+    remindEditingId.value = null;
+  };
 
   const modalTitle = computed(() => {
     return uiStore.scheduleView === "todo_groups"
@@ -392,6 +457,7 @@
     formData.groupTitle = "";
     formData.todoText = "";
     formData.priority = 1;
+    formData.remindAt = "";
     showModal.value = true;
   };
 
@@ -413,6 +479,8 @@
             text: formData.todoText,
             priority: formData.priority,
             completed: false,
+            // datetime-local 的 "YYYY-MM-DDTHH:MM" → 存储用的 "YYYY-MM-DD HH:MM"
+            ...(formData.remindAt ? { remindAt: formData.remindAt.replace("T", " ") } : {}),
           });
         }
       }

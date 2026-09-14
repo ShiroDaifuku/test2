@@ -159,7 +159,8 @@ pub struct PersistentMemorySystem {
     recent_window: usize,
     /// 各记忆段注入/压缩时的长度上限（运行时注入截断 + 压缩喂入截断；
     /// 压缩写回不截断，但超限旧片段会在压缩时被丢弃）。
-    section_limits: MemorySectionLimits,
+    /// 可见性：`pub(crate)` —— 供 `api/ds_memory.rs` 的「旧版记忆导入」按同一份上限合并。
+    pub(crate) section_limits: MemorySectionLimits,
 
     section_prompts: HashMap<String, String>,
 }

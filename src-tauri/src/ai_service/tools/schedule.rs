@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::fs;
 
 use async_trait::async_trait;
+use chrono::{Duration, Local, NaiveDateTime, NaiveTime};
 use serde_json::{Value, json};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::AppState;
 use crate::ai_service::proactive_system::types::{TodoGroup, TodoItem, UserScheduleSettings};
@@ -117,6 +118,53 @@ fn optional_i32(
         .map_err(|_| ToolError::InvalidArguments(format!("{tool} 的 {key} 超出 i32 范围")))
 }
 
+/// 把模型给出的提醒时间规整成本地 `YYYY-MM-DD HH:MM`。
+///
+/// 支持两种写法，目的都是**别让模型做日期算术**：
+///   - `HH:MM`（推荐）：取"今天该时刻"，已经过了就顺延到明天；
+///   - `YYYY-MM-DD HH:MM`（也容忍 `T` 分隔、秒、全角冒号）：原样规整。
+/// 空字符串表示清除提醒（返回 `Ok(None)`）。
+fn resolve_remind_at(raw: &str) -> Result<Option<String>, String> {
+    let normalized = raw.trim().replace('：', ":").replace('T', " ");
+    let normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+
+    // 只给时刻：今天是几号由运行设备决定，模型不需要知道
+    for fmt in ["%H:%M", "%H:%M:%S"] {
+        if let Ok(time) = NaiveTime::parse_from_str(&normalized, fmt) {
+            let now = Local::now().naive_local();
+            let mut target = now.date().and_time(time);
+            if target <= now {
+                target += Duration::days(1);
+            }
+            return Ok(Some(target.format("%Y-%m-%d %H:%M").to_string()));
+        }
+    }
+
+    // 完整日期时间
+    for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"] {
+        if let Ok(dt) = NaiveDateTime::parse_from_str(&normalized, fmt) {
+            return Ok(Some(dt.format("%Y-%m-%d %H:%M").to_string()));
+        }
+    }
+
+    Err(format!(
+        "无法解析提醒时间 {:?}：请用 24 小时制的 HH:MM（例如 20:00，已过的时刻会自动顺延到明天），\
+         或完整日期时间 YYYY-MM-DD HH:MM",
+        raw.trim()
+    ))
+}
+
+/// 广播"待办已变更"，让前端重排待办到点提醒的系统通知
+/// （监听方：`src/api/ds-todo-reminder.ts`）。
+fn emit_todos_changed(app: &AppHandle) {
+    if let Err(e) = app.emit("ds:todos_changed", ()) {
+        tracing::warn!("广播待办变更事件失败: {e}");
+    }
+}
+
 /// schedule_get_all：获取全部日程、待办和重要日子。
 pub struct GetAllSchedule;
 
@@ -154,14 +202,24 @@ impl Tool for AddTodo {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::new(
             "schedule_add_todo",
-            "添加一条待办事项。可指定分组（默认 default）、优先级（默认 0）和截止时间",
+            "添加一条待办事项。可指定分组（默认 default）、优先级（默认 0）、截止时间和提醒时间。\
+             用户提到\"什么时候要做\"时（例如\"晚上回寝室要做作业\"、\"明早提醒我交材料\"）要顺手设置 remind_at，\
+             到点系统会弹出通知提醒用户。",
             json!({
                 "type": "object",
                 "properties": {
                     "text": {"type": "string", "description": "待办内容"},
                     "group": {"type": "string", "description": "分组名，默认 default"},
                     "priority": {"type": "integer", "description": "优先级，默认 0"},
-                    "deadline": {"type": "string", "description": "截止时间，可选"}
+                    "deadline": {"type": "string", "description": "截止时间，可选"},
+                    "remind_at": {
+                        "type": "string",
+                        "description": "提醒时间，可选。按用户描述推测一个大致时间：\
+\"晚上\"→20:00、\"下午\"→15:00、\"中午\"→12:00、\"早上/明早\"→08:00、\"睡前\"→22:30、\"下班后\"→18:30、\
+\"一会儿/马上\"→当前时间 +1 小时（可先用 get_current_time 查当前时间）。\
+只写 24 小时制的 HH:MM 即可（已过的时刻会自动顺延到明天）；要指定具体日期时写 YYYY-MM-DD HH:MM。\
+用户完全没提时间就不要填这个字段"
+                    }
                 },
                 "required": ["text"],
                 "additionalProperties": false
@@ -195,6 +253,14 @@ impl Tool for AddTodo {
             .get("deadline")
             .and_then(Value::as_str)
             .map(str::to_string);
+        // DS娘 v0.4：提醒时间（到点发系统通知）。模型可以只给 "20:00"，日期由设备补。
+        let remind_at = obj
+            .get("remind_at")
+            .and_then(Value::as_str)
+            .map(resolve_remind_at)
+            .transpose()
+            .map_err(ToolError::InvalidArguments)?
+            .flatten();
 
         let mut settings = load_schedule_settings().map_err(ToolError::Execution)?;
         let new_id = next_todo_id(&settings).map_err(ToolError::Execution)?;
@@ -212,12 +278,14 @@ impl Tool for AddTodo {
             priority,
             completed: false,
             deadline,
+            remind_at: remind_at.clone(),
         });
 
         save_schedule_settings(&settings).map_err(ToolError::Execution)?;
         let app = context.require_app()?;
         reload_proactive(&app).await;
-        Ok(json!({"ok": true, "id": new_id, "group": group_name}))
+        emit_todos_changed(&app);
+        Ok(json!({"ok": true, "id": new_id, "group": group_name, "remind_at": remind_at}))
     }
 }
 
@@ -229,7 +297,8 @@ impl Tool for UpdateTodo {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::new(
             "schedule_update_todo",
-            "按 ID 更新待办事项的完成状态、内容、优先级或截止时间，至少提供一项",
+            "按 ID 更新待办事项的完成状态、内容、优先级、截止时间或提醒时间，至少提供一项。\
+             用户改口时间（\"改成晚上八点再提醒我\"）时改 remind_at。",
             json!({
                 "type": "object",
                 "properties": {
@@ -238,6 +307,11 @@ impl Tool for UpdateTodo {
                     "text": {"type": "string", "description": "新的待办内容，可选"},
                     "priority": {"type": "integer", "description": "新的优先级，可选"},
                     "deadline": {"type": "string", "description": "新的截止时间，例如 2026-09-20 或 20:30；传空字符串表示清除截止时间"},
+                    "remind_at": {
+                        "type": "string",
+                        "description": "新的提醒时间；传空字符串表示清除提醒。写法同 schedule_add_todo：\
+只写 24 小时制的 HH:MM（已过会自动顺延到明天）或完整的 YYYY-MM-DD HH:MM"
+                    },
                     "group": {"type": "string", "description": "分组名；旧数据 ID 重复时必须提供"}
                 },
                 "required": ["id"],
@@ -261,10 +335,22 @@ impl Tool for UpdateTodo {
         // DS娘 v0.4 补的"改期"能力：LingChat 原版没有 deadline 写入方（schema 里也没有），
         // 只能靠改写 text 来"改期"。这里补上，空字符串表示清除。
         let deadline = obj.get("deadline").and_then(Value::as_str).map(str::to_string);
+        // 提醒时间：None = 没提供（不改），Some(None) = 传了空字符串（清除）
+        let remind_at = obj
+            .get("remind_at")
+            .and_then(Value::as_str)
+            .map(resolve_remind_at)
+            .transpose()
+            .map_err(ToolError::InvalidArguments)?;
         let requested_group = obj.get("group").and_then(Value::as_str);
-        if done.is_none() && text.is_none() && priority.is_none() && deadline.is_none() {
+        if done.is_none()
+            && text.is_none()
+            && priority.is_none()
+            && deadline.is_none()
+            && remind_at.is_none()
+        {
             return Err(ToolError::InvalidArguments(
-                "schedule_update_todo 至少需要 done/text/priority/deadline 中的一项".into(),
+                "schedule_update_todo 至少需要 done/text/priority/deadline/remind_at 中的一项".into(),
             ));
         }
 
@@ -295,11 +381,16 @@ impl Tool for UpdateTodo {
             let trimmed = dl.trim();
             todo.deadline = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
         }
+        if let Some(ra) = remind_at {
+            todo.remind_at = ra;
+        }
+        let applied_remind_at = todo.remind_at.clone();
 
         save_schedule_settings(&settings).map_err(ToolError::Execution)?;
         let app = context.require_app()?;
         reload_proactive(&app).await;
-        Ok(json!({"ok": true, "id": id, "group": group_name}))
+        emit_todos_changed(&app);
+        Ok(json!({"ok": true, "id": id, "group": group_name, "remind_at": applied_remind_at}))
     }
 }
 
@@ -348,6 +439,7 @@ impl Tool for DeleteTodo {
         save_schedule_settings(&settings).map_err(ToolError::Execution)?;
         let app = context.require_app()?;
         reload_proactive(&app).await;
+        emit_todos_changed(&app);
         Ok(json!({"ok": true, "id": id, "group": group_name}))
     }
 }

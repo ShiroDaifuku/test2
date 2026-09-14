@@ -256,6 +256,52 @@
         </div>
       </div>
     </Transition>
+
+    <!-- 阶段结束提示窗：不再自动进入下一阶段，必须手动点「继续」
+         （系统级通知已在阶段开始时排定，见 schedulePhaseNotification；
+         遮罩不绑定关闭，保证它是"必须做选择"的闸门） -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-all duration-200 ease-out"
+        leave-active-class="transition-all duration-150 ease-in"
+        enter-from-class="opacity-0"
+        leave-to-class="opacity-0"
+      >
+        <div
+          v-if="awaitingContinue"
+          class="fixed inset-0 z-[2200] flex items-center justify-center bg-black/50 p-4
+            backdrop-blur-sm"
+        >
+          <div
+            class="flex w-80 max-w-[90vw] flex-col items-center rounded-3xl border border-white/10
+              bg-[#12121c]/90 p-6 text-center text-white
+              shadow-[0_8px_32px_rgba(0,0,0,0.4)] backdrop-blur-[20px]"
+          >
+            <div class="mb-2 text-4xl leading-none">{{ phaseEndIcon }}</div>
+            <h3 class="m-0 mb-2 text-lg font-bold">{{ phaseEndTitle }}</h3>
+            <p class="m-0 mb-6 text-[13px] leading-relaxed text-white/70">{{ phaseEndBody }}</p>
+
+            <div class="flex w-full gap-2">
+              <button
+                class="flex-1 cursor-pointer rounded-xl border-none bg-white/10 px-4 py-2.5 text-sm
+                  font-medium text-white/80 transition-colors hover:bg-white/20"
+                @click="stopFromModal"
+              >
+                {{ $t("ui.pomodoro.stopBtn") }}
+              </button>
+              <button
+                class="flex-1 cursor-pointer rounded-xl border-none bg-gradient-to-r from-[#4facfe]
+                  to-[#00f2fe] px-4 py-2.5 text-sm font-bold text-[#0b0b12] transition-transform
+                  active:scale-95"
+                @click="onContinue"
+              >
+                {{ $t("ui.pomodoro.continueBtn") }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -265,6 +311,15 @@
   import { useGameStore } from "../../stores/modules/game";
   import { useUIStore } from "@/stores/modules/ui/ui";
   import { invoke } from "@tauri-apps/api/core";
+  import {
+    isPermissionGranted,
+    requestPermission,
+    sendNotification,
+    cancel,
+    pending,
+    removeActive,
+    Schedule,
+  } from "@tauri-apps/plugin-notification";
   import { useI18n } from "vue-i18n";
 
   const { t } = useI18n();
@@ -282,6 +337,10 @@
   const STORAGE_KEY_WORK_LABEL = "pomodoro_work_label";
   const STORAGE_KEY_PHASE_END_AT = "pomodoro_phase_end_at";
   const STORAGE_KEY_COMPLETED = "pomodoro_completed";
+  // 阶段已结束、正在等用户点「继续」（刷新/重启后要恢复弹窗，否则会卡在 00:00 无提示）
+  const STORAGE_KEY_AWAITING = "pomodoro_awaiting_continue";
+  /** 系统级通知的固定 id：同一时刻只保留一条"本阶段结束"通知，切换阶段时覆盖 */
+  const PHASE_NOTIFY_ID = 98001;
 
   type Mode = "work" | "break";
 
@@ -310,6 +369,9 @@
   // 全部轮次已完成（对应参考游戏的 Complete 状态），下次开始会从第一轮专注重新起步
   const justCompleted = ref(false);
   let timerId: number | null = null;
+
+  // 阶段已经走完、弹窗等用户点「继续」：这个状态下不计时、不自动推进，也不会插话给 AI
+  const awaitingContinue = ref(false);
 
   const workMinutesInput = ref(25);
   const breakMinutesInput = ref(5);
@@ -358,6 +420,40 @@
     const isPristine =
       remainingMs.value === currentTotalMs.value && cycleIndex.value === 1 && mode.value === "work";
     return isPristine ? t("ui.pomodoro.statusIdle") : t("ui.pomodoro.statusPaused");
+  });
+
+  // ─── 阶段结束弹窗文案 ───────────────────────────────
+  // 弹窗出现时 mode / cycleIndex 仍停在"刚结束的那个阶段"，据此推导下一步是什么：
+  // 专注结束 → 休息；休息结束 → 下一轮专注；最后一轮休息结束 → 整轮完成
+  const phaseIsLastBreak = computed(
+    () => mode.value === "break" && cycleIndex.value >= cyclesTotal.value
+  );
+  const phaseEndIcon = computed(() =>
+    mode.value === "work" ? "🍅" : phaseIsLastBreak.value ? "🎉" : "☕"
+  );
+  const phaseEndTitle = computed(() => {
+    if (mode.value === "work") return t("ui.pomodoro.phaseWorkEndTitle");
+    return phaseIsLastBreak.value
+      ? t("ui.pomodoro.phaseAllDoneTitle")
+      : t("ui.pomodoro.phaseBreakEndTitle");
+  });
+  const phaseEndBody = computed(() => {
+    if (mode.value === "work") {
+      return t("ui.pomodoro.phaseWorkEndBody", {
+        current: cycleIndex.value,
+        total: cyclesTotal.value,
+        minutes: formatMinutes(breakDurationMs.value),
+      });
+    }
+    if (phaseIsLastBreak.value) {
+      return t("ui.pomodoro.phaseAllDoneBody", { total: cyclesTotal.value });
+    }
+    return t("ui.pomodoro.phaseBreakEndBody", {
+      current: cycleIndex.value + 1,
+      total: cyclesTotal.value,
+      label: workLabel.value,
+      minutes: formatMinutes(workDurationMs.value),
+    });
   });
 
   const pendingPrompts = ref<string[]>([]);
@@ -432,12 +528,90 @@
     localStorage.setItem(STORAGE_KEY_WORK_LABEL, customWorkLabel.value);
     localStorage.setItem(STORAGE_KEY_PHASE_END_AT, JSON.stringify(phaseEndAt.value));
     localStorage.setItem(STORAGE_KEY_COMPLETED, JSON.stringify(justCompleted.value));
+    localStorage.setItem(STORAGE_KEY_AWAITING, JSON.stringify(awaitingContinue.value));
   }
 
   function clearTimer() {
     if (timerId) {
       clearInterval(timerId);
       timerId = null;
+    }
+  }
+
+  // ─── 系统级提示（每个阶段结束时由系统发出）──────────────────────
+  // 与老版 DS娘一致：阶段结束除了应用内弹窗，还有一条系统通知，应用在后台/被挂起也能收到。
+  // 新流程下阶段不再自动衔接，所以只需要在"当前阶段真正开始跑"时排一条本阶段结束的通知：
+  //   开始/继续/恢复 → schedulePhaseNotification(phaseEndAt)
+  //   暂停/重置/完成 → cancelPhaseNotification()
+  let notifyAllowed: boolean | null = null;
+
+  async function ensureNotifyPermission(): Promise<boolean> {
+    if (notifyAllowed !== null) return notifyAllowed;
+    try {
+      notifyAllowed = (await isPermissionGranted()) || (await requestPermission()) === "granted";
+    } catch (e) {
+      console.warn("番茄钟：通知权限检查失败，本次跳过系统提示:", e);
+      notifyAllowed = false;
+    }
+    return notifyAllowed;
+  }
+
+  async function cancelPhaseNotification() {
+    try {
+      await cancel([PHASE_NOTIFY_ID]);
+    } catch {
+      // 没有待发通知时会报错，忽略
+    }
+  }
+
+  /** 清掉已经弹过的那条（用户点了「继续」/「结束」后它就是过期信息了） */
+  async function clearDeliveredNotification() {
+    try {
+      await removeActive([{ id: PHASE_NOTIFY_ID }]);
+    } catch {
+      // 忽略
+    }
+  }
+
+  /**
+   * 排定"本阶段结束"的系统通知。
+   * `force = false` 用于应用重启后的恢复：系统里已经排好的那条仍然有效，不重复排。
+   */
+  async function schedulePhaseNotification(at: number, force = true) {
+    if (!(at > Date.now())) return;
+    try {
+      const waiting = await pending();
+      const exists = waiting.some((n) => n.id === PHASE_NOTIFY_ID);
+      if (exists && !force) return;
+      if (exists) await cancelPhaseNotification();
+    } catch {
+      // pending 不可用（如平台不支持）时按未排定处理
+    }
+    if (!(await ensureNotifyPermission())) return;
+
+    const isWork = mode.value === "work";
+    const isLastBreak = !isWork && cycleIndex.value >= cyclesTotal.value;
+    try {
+      sendNotification({
+        id: PHASE_NOTIFY_ID,
+        title: isWork
+          ? t("ui.pomodoro.notifyWorkEndTitle")
+          : isLastBreak
+            ? t("ui.pomodoro.notifyAllDoneTitle")
+            : t("ui.pomodoro.notifyBreakEndTitle"),
+        body: isWork
+          ? t("ui.pomodoro.notifyWorkEndBody", { minutes: formatMinutes(breakDurationMs.value) })
+          : isLastBreak
+            ? t("ui.pomodoro.notifyAllDoneBody", { total: cyclesTotal.value })
+            : t("ui.pomodoro.notifyBreakEndBody", {
+                current: cycleIndex.value + 1,
+                total: cyclesTotal.value,
+                label: workLabel.value,
+              }),
+        schedule: Schedule.at(new Date(at)),
+      });
+    } catch (e) {
+      console.warn("番茄钟：排定系统通知失败（不影响计时）:", e);
     }
   }
 
@@ -486,21 +660,24 @@
   }
 
   // 推进到下一个阶段，返回需要发给 AI 的提示文本。
-  // 下一阶段的结束时刻沿用上一次的结束时间链式推算，长时间挂起后可以逐阶段补跑。
+  // 阶段改由用户手动点「继续」触发，所以下一阶段从"点击时刻"起算——
+  // 不能再沿用上一次结束时刻链式推算（晚点「继续」会把下一阶段的时间吃掉）。
   function advancePhase(): string | null {
     const prevCycle = cycleIndex.value;
-    const endedAt = phaseEndAt.value;
+    const startedAt = Date.now();
 
     if (mode.value === "work") {
       mode.value = "break";
-      phaseEndAt.value = endedAt + breakDurationMs.value;
+      remainingMs.value = breakDurationMs.value;
+      phaseEndAt.value = startedAt + breakDurationMs.value;
       return `{番茄钟提醒：第${prevCycle}/${cyclesTotal.value}轮专注结束，开始休息 ${formatMinutes(breakDurationMs.value)} 分钟。}`;
     }
 
     if (cycleIndex.value < cyclesTotal.value) {
       cycleIndex.value += 1;
       mode.value = "work";
-      phaseEndAt.value = endedAt + workDurationMs.value;
+      remainingMs.value = workDurationMs.value;
+      phaseEndAt.value = startedAt + workDurationMs.value;
       return `{番茄钟提醒：休息结束，开始第${cycleIndex.value}/${cyclesTotal.value}轮专注（${workLabel.value}），时长 ${formatMinutes(workDurationMs.value)} 分钟}`;
     }
 
@@ -516,34 +693,30 @@
   }
 
   function tick() {
+    // 阶段已结束、等用户点「继续」期间不再推进：弹窗就是闸门
+    if (awaitingContinue.value) return;
     if (!isRunning.value || phaseEndAt.value <= 0) return;
 
-    const now = Date.now();
-    let remaining = phaseEndAt.value - now;
-    const prompts: string[] = [];
-    let guard = 0;
-
-    // 页面被节流/挂起/刷新时 remaining 可能已跨过多个阶段，循环补跑直到追上当前时刻
-    while (remaining <= 0 && guard++ < 10000) {
-      const prompt = advancePhase();
-      if (prompt) prompts.push(prompt);
-      if (!isRunning.value) break; // 全部轮次完成
-      remaining = phaseEndAt.value - now;
+    const remaining = phaseEndAt.value - Date.now();
+    if (remaining > 0) {
+      remainingMs.value = remaining;
+      persistState();
+      return;
     }
 
-    if (isRunning.value) {
-      remainingMs.value = Math.max(0, remaining);
-    }
-
-    // 补跑跨过了多个阶段时只发最后一条提示，避免恢复时连续刷屏
-    const lastPrompt = prompts[prompts.length - 1];
-    if (lastPrompt) sendUserPrompt(lastPrompt);
-
+    // 阶段结束：停表 + 弹窗，等用户手动点「继续」才进入下一阶段。
+    // 系统级通知在阶段开始时就已经排定，此刻由系统发出（应用在后台也收得到）。
+    // 不再像以前那样循环补跑跨过的多个阶段——每个阶段的衔接都需要用户确认。
+    clearTimer();
+    isRunning.value = false;
+    remainingMs.value = 0;
+    awaitingContinue.value = true;
     persistState();
   }
 
   function start() {
-    if (isRunning.value) return;
+    // 阶段已结束正在等用户确认时，只能走弹窗的「继续」，避免把弹窗绕过去
+    if (isRunning.value || awaitingContinue.value) return;
     // 已完成或剩余时间异常归零时，从第一轮专注重新开始，
     // 否则会错误地以上一次结束时的休息阶段启动
     if (justCompleted.value || remainingMs.value <= 0) {
@@ -558,6 +731,8 @@
     phaseEndAt.value = Date.now() + remainingMs.value;
     clearTimer();
     timerId = window.setInterval(tick, 1000);
+    // 本阶段结束时的系统提示（阶段一开始就排定，之后应用被挂起/切后台也照常触发）
+    void schedulePhaseNotification(phaseEndAt.value);
     persistState();
 
     if (isResume) {
@@ -581,6 +756,8 @@
     phaseEndAt.value = 0;
     isRunning.value = false;
     clearTimer();
+    // 暂停后本阶段不再结束，撤掉已排定的系统提示
+    void cancelPhaseNotification();
     persistState();
 
     // 暂停也告知 AI，方便角色做出反应（与阶段切换提醒同格式）
@@ -597,8 +774,39 @@
     justCompleted.value = false;
     phaseEndAt.value = 0;
     isRunning.value = false;
+    awaitingContinue.value = false;
     clearTimer();
+    void cancelPhaseNotification();
     persistState();
+  }
+
+  // ─── 阶段结束弹窗的两个按钮 ───────────────────────────
+  /** 「继续」：进入下一阶段的唯一途径（阶段从点击时刻起算） */
+  function onContinue() {
+    if (!awaitingContinue.value) return;
+    awaitingContinue.value = false;
+    const prompt = advancePhase();
+    if (prompt) sendUserPrompt(prompt);
+
+    if (phaseEndAt.value > 0) {
+      isRunning.value = true;
+      clearTimer();
+      timerId = window.setInterval(tick, 1000);
+      void clearDeliveredNotification();
+      void schedulePhaseNotification(phaseEndAt.value);
+    } else {
+      // 全部轮次已完成：撤掉未发的通知与已弹的那条
+      void cancelPhaseNotification();
+      void clearDeliveredNotification();
+    }
+    persistState();
+  }
+
+  /** 「结束番茄钟」：中断本次番茄钟并回到第一轮待启动状态（不推进阶段） */
+  function stopFromModal() {
+    awaitingContinue.value = false;
+    reset();
+    void clearDeliveredNotification();
   }
 
   function toggleEnabled() {
@@ -682,6 +890,7 @@
       const savedWorkLabel = localStorage.getItem(STORAGE_KEY_WORK_LABEL) || "";
       const savedPhaseEndAt = JSON.parse(localStorage.getItem(STORAGE_KEY_PHASE_END_AT) || "0");
       const savedCompleted = JSON.parse(localStorage.getItem(STORAGE_KEY_COMPLETED) || "false");
+      const savedAwaiting = JSON.parse(localStorage.getItem(STORAGE_KEY_AWAITING) || "false");
 
       enabled.value = !!savedEnabled;
       workDurationMs.value = Number.isFinite(savedWorkMs) ? savedWorkMs : DEFAULT_WORK_MS;
@@ -695,8 +904,13 @@
       // 旧版默认文案"工作"视为未自定义，迁移后跟随界面语言
       customWorkLabel.value = savedWorkLabel === "工作" ? "" : savedWorkLabel;
       justCompleted.value = !!savedCompleted;
+      // 阶段已经结束、用户还没点「继续」：恢复弹窗（这种状态下不计时）
+      awaitingContinue.value = !!savedAwaiting && !justCompleted.value;
       // 不再要求面板处于展开状态：折叠状态下退出，下次启动计时也在后台恢复
-      isRunning.value = !!savedRunning && (savedPhaseEndAt > 0 || savedRemaining > 0);
+      isRunning.value =
+        !!savedRunning &&
+        !awaitingContinue.value &&
+        (savedPhaseEndAt > 0 || savedRemaining > 0);
 
       workMinutesInput.value = workDurationMs.value / 60000;
       breakMinutesInput.value = breakDurationMs.value / 60000;
@@ -707,8 +921,11 @@
         phaseEndAt.value = savedPhaseEndAt > 0 ? savedPhaseEndAt : Date.now() + remainingMs.value;
         clearTimer();
         timerId = window.setInterval(tick, 1000);
-        // 立即补跑页面关闭/挂起期间流逝的时间（含跨阶段推进）
+        // 立即结算页面关闭/挂起期间流逝的时间：还没到点就继续走，
+        // 已经到点则进入"等用户点继续"的弹窗状态（不再跨阶段自动补跑）
         tick();
+        // 仍在计时：确保系统里排着本阶段结束的提示（系统已排好的不重复排）
+        if (isRunning.value) void schedulePhaseNotification(phaseEndAt.value, false);
       }
     } catch {}
   });

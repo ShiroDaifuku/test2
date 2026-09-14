@@ -61,6 +61,10 @@ pub struct TodoItem {
     pub priority: i32,
     pub completed: bool,
     pub deadline: Option<String>,
+    /// DS娘 v0.4：提醒时间（本地 `YYYY-MM-DD HH:MM`）。到点由前端排定的系统通知提醒，
+    /// 与 `deadline`（截止时间，只作文本展示/云端字段）是两件事。
+    /// 旧存档没有这个字段，serde 会按 None 读入。
+    pub remind_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
