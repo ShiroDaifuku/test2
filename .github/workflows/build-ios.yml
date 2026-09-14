@@ -71,7 +71,8 @@ jobs:
         # 打包出的 IPA 里带 Key、仓库里没有。未配置该 secret 时会跳过自举，App 内可手动填写。
         env:
           VITE_DS_KEY: ${{ secrets.DS_API_KEY }}
-          # 云端记忆中枢配对令牌：同样只在构建期注入，仓库里不留明文（未配置则同步功能跳过）
+          # 云端记忆中枢：地址与配对令牌都只在构建期注入，公开仓库里既不留端点也不留令牌
+          VITE_WHALE_URL: ${{ secrets.WHALE_URL }}
           VITE_WHALE_TOKEN: ${{ secrets.WHALE_TOKEN }}
         run: pnpm run ios:build
 

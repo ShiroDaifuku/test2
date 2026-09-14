@@ -686,8 +686,8 @@ pub fn build_config_tree(app: &AppHandle) -> ConfigTree {
                     },
                     ConfigSetting {
                         key: keys::DS_CLOUD_URL.to_string(),
-                        value: read_setting(app, keys::DS_CLOUD_URL, "https://whale-girl-cloud.pages.dev"),
-                        description: "DS_CLOUD_URL — 云端记忆中枢地址".to_string(),
+                        value: read_setting(app, keys::DS_CLOUD_URL, ""),
+                        description: "DS_CLOUD_URL — 云端记忆中枢地址（构建期由 Secret 注入并自动写回；也可手动填）".to_string(),
                         setting_type: "text".to_string(),
                     },
                     ConfigSetting {

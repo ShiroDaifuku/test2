@@ -373,6 +373,16 @@ impl GameRoleManager {
         }
     }
 
+    /// 取某个角色已惰性构造的 MemoryBank 压缩系统；未构造时返回 `None`。
+    ///
+    /// 可见性：`pub(crate)` —— 供 `api/ds_memory.rs` 的「旧版记忆导入」在改写
+    /// `GameRole.memory_bank` 的同时，把同一段正文写进运行时压缩系统
+    /// （`sync_memories` 每轮都会 `sync_to_role`，只改 `GameRole` 会被旧值覆盖）。
+    /// 只做只读转发，**不改动任何既有逻辑**，也不开放直接增删系统。
+    pub(crate) fn memory_bank_system(&self, role_id: i32) -> Option<&PersistentMemorySystem> {
+        self.memory_bank_systems.get(&role_id)
+    }
+
     /// 惰性构造角色的 `PersistentMemorySystem`。
     ///
     /// 调用方保证在 `enabled=true` 时槽位内已就绪 LLM（构造函数注入）。

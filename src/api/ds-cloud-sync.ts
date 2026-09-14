@@ -80,6 +80,15 @@ interface CloudMemory {
   summary?: string;
   diary?: Record<string, unknown>;
   logs?: Array<Record<string, unknown>>;
+  /**
+   * 旧版（云端记忆中枢 + 桌宠/记忆桥）遗留字段，见 `DS娘_云端部署包/_worker.js:165`
+   * 的 `defaultMemory()`：`{ user, people, state, events, facts, ... }`。
+   * 新版 Worker 与两端并行保留（`_worker.js:652-762`：旧字段照旧合并、写入 bank 的
+   * 同时不删旧字段），所以我们**读取时只做兼容**，不写回、不改协议。
+   */
+  user?: Record<string, unknown>;
+  people?: Record<string, { relation?: string; info?: string[] }>;
+  facts?: Array<{ text?: string; cat?: string } | string>;
 }
 
 // ─── 设置读取（带缓存） ───
@@ -93,9 +102,14 @@ interface CloudSettings {
   token: string;
 }
 
-const DEFAULT_URL = "https://whale-girl-cloud.pages.dev";
-/** CI 注入的兜底令牌（见 .github/workflows/build-ios.yml:75），本地未注入时为空 */
+/**
+ * CI 注入的环境变量（见 .github/workflows/build-ios.yml）。
+ * **地址与令牌都不写死在源码里**——本仓库是公开仓库，硬编码会暴露云端端点。
+ * 本地未注入时二者都为空字符串，同步会自动跳过（可在设置里手动填）。
+ */
 const ENV = (import.meta as unknown as { env?: Record<string, string> }).env || {};
+/** 记忆中枢地址：构建期由 VITE_WHALE_URL 注入，并在首次同步时写回设置 */
+const DEFAULT_URL = String(ENV.VITE_WHALE_URL || "").trim();
 
 let settingsCache: CloudSettings | null = null;
 
@@ -134,6 +148,17 @@ async function loadCloudSettings(): Promise<CloudSettings> {
     const url = rawUrl.trim() || DEFAULT_URL;
     let token = rawToken.trim();
 
+    // 地址兜底：设置里没有地址时，用 CI 注入的 VITE_WHALE_URL（构建期环境变量）并写回设置。
+    // 这样公开仓库里既没有令牌、也没有云端端点。
+    if (!rawUrl.trim() && DEFAULT_URL) {
+      try {
+        await saveEnvConfig({ "ds.cloud_url": DEFAULT_URL });
+        invalidateCloudSettings();
+      } catch (e) {
+        console.warn("[DS娘·云同步] 回写 VITE_WHALE_URL 到设置失败（本次仍用环境变量同步）:", e);
+      }
+    }
+
     // Key 兜底：设置里没有令牌时，用 CI 注入的 VITE_WHALE_TOKEN（构建期环境变量），
     // 并写回设置，保证下次启动/其它窗口一致。写回失败不影响本次同步。
     if (!token) {
@@ -154,6 +179,10 @@ async function loadCloudSettings(): Promise<CloudSettings> {
       console.warn(
         "[DS娘·云同步] 未配置 ds.cloud_token 且未注入 VITE_WHALE_TOKEN，跳过云同步"
       );
+    }
+    if (!url) {
+      enabled = false;
+      console.warn("[DS娘·云同步] 未配置 ds.cloud_url 且未注入 VITE_WHALE_URL，跳过云同步");
     }
     settingsCache = { enabled, url, token };
     return settingsCache;
@@ -232,6 +261,134 @@ function mergeById<T>(localItems: T[], cloudItems: T[], idOf: (item: T) => strin
 function toNumber(value: unknown, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+// ─── 旧版记忆 → MemoryBank 段落（一次性导入） ───
+
+/**
+ * 一次性导入标记：值为云端数据的指纹（`bank.notes.length-facts.length`）。
+ * 指纹相同 ⇒ 已经导过，跳过；指纹变了（云端又有新数据）才重导。
+ * 后端 `ds_import_memory_sections` 本身也按行去重，重导不会堆积。
+ */
+const LEGACY_IMPORT_KEY = "ds_legacy_mem_imported";
+
+/** 去掉首尾空白并丢弃空行；非字符串元素（云端偶尔混入对象）直接跳过。 */
+function splitLines(text: string): string[] {
+  return String(text || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+/** `{major: "…", hobby: "…"}` → `- 键：值`（跳过空值）。 */
+function objectToLines(source: Record<string, unknown> | undefined): string[] {
+  const out: string[] = [];
+  for (const [key, value] of Object.entries(source || {})) {
+    const name = String(key ?? "").trim();
+    if (!name) continue;
+    const text =
+      value === null || value === undefined
+        ? ""
+        : typeof value === "object"
+          ? JSON.stringify(value)
+          : String(value);
+    if (!text.trim()) continue;
+    out.push(`- ${name}：${text.trim()}`);
+  }
+  return out;
+}
+
+/**
+ * 把云端「旧版记忆」组装成 MemoryBank 段落文本。
+ *
+ * **按段落容量分配**（这是关键）：
+ * - `user_info`（默认上限 800 字符）← `bank.profile` + 旧字段 `user`（量小）
+ * - `long_term`（默认上限 2000 字符）← 旧字段 `facts` + `people` + `bank.notes`
+ *   实测：48 条笔记 + 33 条事实 + 4 人 ≈ 1.7k 字符，正好落在 long_term 里；
+ *   若按最初规格塞进 user_info，会被 800 字符上限截掉大半。
+ *
+ * 顺序上**越重要的越靠后**——Rust 侧合并遇超限时优先保留新并入的靠后行，因此笔记放最后。
+ * 两段都为空时返回 `null`（调用方据此跳过，不做无意义的导入）。
+ */
+function buildLegacySections(
+  memory: CloudMemory | null | undefined
+): Record<string, string> | null {
+  const bank = memory?.bank || {};
+
+  // ① user_info：画像 + 旧字段 user（都很短）
+  const userInfoLines: string[] = [];
+  userInfoLines.push(...objectToLines(bank.profile));
+  userInfoLines.push(...objectToLines(memory?.user));
+
+  // ② long_term：事实 → 人物 → 笔记（顺序 = 重要性递增）
+  const longTermLines: string[] = [];
+
+  const facts = Array.isArray(memory?.facts) ? (memory?.facts as unknown[]) : [];
+  for (const fact of facts) {
+    const text =
+      typeof fact === "string" ? fact : String((fact as { text?: unknown })?.text ?? "");
+    const trimmed = text.trim();
+    if (trimmed) longTermLines.push(`- ${trimmed}`);
+  }
+
+  for (const [name, raw] of Object.entries(memory?.people || {})) {
+    const who = String(name || "").trim();
+    if (!who) continue;
+    const entry = (raw || {}) as { relation?: unknown; info?: unknown };
+    const relation = entry.relation ? String(entry.relation).trim() : "";
+    const details = (Array.isArray(entry.info) ? entry.info : [])
+      .map((item) => String(item ?? "").trim())
+      .filter((item) => item.length > 0);
+    const suffix = details.length > 0 ? `：${details.join("；")}` : "";
+    longTermLines.push(`- ${who}${relation ? `（${relation}）` : ""}${suffix}`);
+  }
+
+  const notes = Array.isArray(bank.notes) ? bank.notes : [];
+  for (const note of notes) {
+    const content = String(note?.content ?? "").trim();
+    if (content) longTermLines.push(`- ${content}`);
+  }
+
+  const userInfo = splitLines(userInfoLines.join("\n")).join("\n");
+  const longTerm = splitLines(longTermLines.join("\n")).join("\n");
+
+  const sections: Record<string, string> = {};
+  if (userInfo) sections.user_info = userInfo;
+  if (longTerm) sections.long_term = longTerm;
+  return Object.keys(sections).length > 0 ? sections : null;
+}
+
+/**
+ * 把云端返回的旧版记忆**一次性**并入 MemoryBank 段落，让它从此每轮自动注入。
+ *
+ * 幂等：`localStorage[ds_legacy_mem_imported]` 存云端数据指纹，相同则直接跳过。
+ * 静默：任何失败（含 Rust 侧报错）只 `console.warn`，绝不抛、绝不弹通知——
+ * 调用点同步失败不会影响聊天（与本文件顶部「铁律」一致）。
+ */
+async function importLegacyMemory(memory: CloudMemory | null | undefined): Promise<void> {
+  try {
+    const notesCount = memory?.bank?.notes?.length ?? 0;
+    const factsCount = memory?.facts?.length ?? 0;
+    const fingerprint = `${notesCount}-${factsCount}`;
+    if (localStorage.getItem(LEGACY_IMPORT_KEY) === fingerprint) return;
+
+    const sections = buildLegacySections(memory);
+    if (!sections) return;
+
+    const res = (await invoke("ds_import_memory_sections", { sections })) as
+      | { persisted?: boolean }
+      | null;
+    // 只有真正落盘才记指纹：若此刻还没有存档槽（persisted=false），内容只在内存里、
+    // 重启会丢；不记指纹，等下次同步（有存档后）再导一次。
+    if (res && res.persisted === false) {
+      console.warn("[DS娘·云同步] 旧版记忆已写入内存但未落盘（暂无存档槽），下次同步会重试");
+      return;
+    }
+    localStorage.setItem(LEGACY_IMPORT_KEY, fingerprint);
+    console.log("[DS娘·云同步] 旧版记忆已并入 MemoryBank 段落:", fingerprint);
+  } catch (e) {
+    console.warn("[DS娘·云同步] 旧版记忆导入失败（已静默，不影响聊天）:", e);
+  }
 }
 
 // ─── 手动笔记：本地 ⇄ bank.notes ───
@@ -522,6 +679,11 @@ export async function syncCloudNow(): Promise<{
     } catch (e) {
       console.warn("[DS娘·云同步] 合并/写回本地日志失败（不影响聊天）:", e);
     }
+
+    // 4) Pull 之后：把云端那份「旧版记忆」一次性翻译成 MemoryBank 段落，
+    //    让它在**每一轮对话**里自动注入（内部自带 localStorage 指纹与 try/catch，
+    //    已导过就跳过、失败只 warn，不影响这里的 ok 判定）。
+    await importLegacyMemory(remote);
 
     ok = true;
   } catch (e) {

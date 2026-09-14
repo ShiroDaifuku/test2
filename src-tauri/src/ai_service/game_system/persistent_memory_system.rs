@@ -105,7 +105,10 @@ impl Default for MemorySectionLimits {
 }
 
 /// 按字符数安全截断（避免切破 UTF-8 多字节字符）。超限部分直接丢弃，无省略标记。
-fn truncate_to_chars(s: &str, max_chars: usize) -> String {
+///
+/// 可见性：`pub(crate)` —— 供 `api/ds_memory.rs` 的「旧版记忆导入」复用**同一份**
+/// 截断规则（段长上限一致），避免命令侧自造截断逻辑导致两侧行为不一致。逻辑未改动。
+pub(crate) fn truncate_to_chars(s: &str, max_chars: usize) -> String {
     if max_chars == 0 || s.chars().count() <= max_chars {
         return s.to_string();
     }
@@ -132,7 +135,13 @@ pub struct PersistentMemorySystem {
     /// LLM 槽位（支持运行时热切换）。
     llm: LlmSlot,
 
-    memory_bank: Arc<Mutex<GameMemoryBank>>,
+    /// 运行时 MemoryBank（`Arc` 与后台压缩任务共享）。
+    ///
+    /// 可见性：`pub(crate)` —— 供 `api/ds_memory.rs` 的「旧版记忆导入」在写入
+    /// `GameRole.memory_bank` 的同时更新这里；只改 `GameRole` 会被
+    /// `sync_to_role()`（本文件 `:329-337`）用这里的旧值覆盖回去，导致导入内容
+    /// 下一轮对话仍然不可见。字段类型与语义均未改动。
+    pub(crate) memory_bank: Arc<Mutex<GameMemoryBank>>,
     is_updating: Arc<AtomicBool>,
     has_pending: Arc<AtomicBool>,
     /// 每次历史刷新都会递增；后台任务提交前必须仍匹配，避免撤回/读档后写入旧摘要。

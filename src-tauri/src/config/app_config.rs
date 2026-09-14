@@ -134,7 +134,9 @@ pub struct AppConfig {
 }
 
 fn default_ds_cloud_url() -> String {
-    "https://whale-girl-cloud.pages.dev".to_string()
+    // 不写死云端地址（本仓库是公开仓库，会暴露端点）。由 CI 通过 VITE_WHALE_URL 注入，
+    // 前端首次同步时写回设置；也可在「设置 → 高级 → DS娘」里手动填。
+    String::new()
 }
 
 // ========== Default 实现（单一真相源） ==========
