@@ -273,7 +273,10 @@ pub async fn ds_import_memory_sections(
                 _ => role.memory_bank.data.short_term.as_str(),
             };
             let new_text = merge_section_text(existing, &text, max_chars);
-            (new_text, new_text.chars().count())
+            // 先算字数再交出去：写成 `(new_text, new_text.chars().count())` 会先把 new_text
+            // 移进元组再借用它（E0382 borrow of moved value）
+            let new_chars = new_text.chars().count();
+            (new_text, new_chars)
         };
 
         {
@@ -318,7 +321,8 @@ pub async fn ds_import_memory_sections(
         // `AppState` 通过 `Deref` 链暴露 `db` / `ai_service`
         // （`api/save.rs:133-134`、`api/role_archive/mod.rs:395` 同款写法）。
         let state = app.state::<crate::AppState>();
-        let mut service = state.ai_service.lock().await;
+        // 不需要 mut：可变性来自 `game_status` 那个临时守卫的解引用
+        let service = state.ai_service.lock().await;
         service
             .game_status
             .lock()
