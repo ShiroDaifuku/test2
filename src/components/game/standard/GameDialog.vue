@@ -267,6 +267,7 @@
   import { TypeWriter } from "../../../utils/typewriter/TypeWriter";
   import { Button } from "../../base";
   import { recordChat } from "../../../api/ds-silent-log";
+  import { prepareTurnRecall } from "../../../api/ds-memory-recall";
   import katex from "katex";
   import "katex/dist/katex.min.css";
 
@@ -835,6 +836,8 @@
           });
         });
     } else {
+      // DS娘 v0.4：发送前先按这句话检索相关记忆（写入运行时文件，本轮 prompt 注入；失败静默）
+      void prepareTurnRecall(text);
       invoke("send_chat_message", {
         text,
         screenshotBase64: screenshotBase64.value,

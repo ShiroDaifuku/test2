@@ -9,7 +9,7 @@ use genai::Client as GenaiClient;
 use genai::ServiceTarget;
 use genai::adapter::AdapterKind;
 use genai::chat::{
-    ChatMessage, ChatOptions, ChatRequest, ChatResponse, ChatStreamEvent, StopReason,
+    ChatMessage, ChatOptions, ChatRequest, ChatResponse, ChatStreamEvent, ContentPart, StopReason,
     ToolCall as GenaiToolCall, ToolChoice, ToolResponse,
 };
 use genai::resolver::{AuthData, Endpoint};
@@ -29,7 +29,9 @@ pub struct GenaiProvider {
     temperature: Option<f64>,
     top_p: Option<f64>,
     enable_thinking: bool,
-    _reasoning_effort: Option<String>,
+    /// 思考深度（none/low/high/max）。DS娘 v0.4 起真正生效：
+    /// 开启思考时作为 `thinking.reasoning_effort` 发出（此前字段名带下划线前缀、从未被读取）。
+    reasoning_effort: Option<String>,
     /// 是否 MiniMax 兼容接口（base_url 或模型名含 minimax）。
     /// MiniMax 的 OpenAI 兼容 API 只接受 thinking.type = "adaptive" / "disabled"，
     /// 传 "enabled" 会直接 400 报错（invalid thinking.type），需单独映射。
@@ -119,7 +121,7 @@ impl GenaiProvider {
             temperature: cfg.temperature,
             top_p: cfg.top_p,
             enable_thinking: cfg.enable_thinking,
-            _reasoning_effort: cfg.reasoning_effort.clone(),
+            reasoning_effort: cfg.reasoning_effort.clone(),
             is_minimax: cfg.base_url.to_lowercase().contains("minimax")
                 || cfg.model.to_lowercase().contains("minimax"),
         })
@@ -169,7 +171,16 @@ impl GenaiProvider {
                             })
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    genai_messages.push(ChatMessage::from(calls));
+                    // DS娘 v0.4 修 bug：这里原来只用 `ChatMessage::from(calls)`，模型的正文
+                    // （tool_calls 同一条 assistant 消息里的 content）被整段丢掉，
+                    // 于是工具轮里模型看不到自己上一轮说过什么，容易重复或前后不一致。
+                    // 现在把正文作为 Text 分片一起带上。
+                    let mut assistant_msg = ChatMessage::from(calls);
+                    let text = msg.content.trim();
+                    if !text.is_empty() {
+                        assistant_msg.content.push(ContentPart::Text(msg.content.clone()));
+                    }
+                    genai_messages.push(assistant_msg);
                 },
                 _ => {
                     let role = match msg.role.as_str() {
@@ -190,6 +201,30 @@ impl GenaiProvider {
             req = req.with_tools(gtools);
         }
         Ok(req)
+    }
+
+    /// 记录一次请求体（含 `ChatOptions` 里的有效参数）。
+    ///
+    /// DS娘 v0.4 修 bug：原来只记录 `chat_req`（model/messages/tools），
+    /// `thinking` / `temperature` / `top_p` / `tool_choice` 都不在里面，
+    /// 于是拿 `data/log/llm/*.json` 核对参数会被误导（会以为这些字段没发出去）。
+    fn log_request_with_options(&self, chat_req: &ChatRequest, opts: &ChatOptions, tool_choice_str: Option<&str>) {
+        let mut logged = serde_json::to_value(chat_req).unwrap_or_default();
+        if let Some(obj) = logged.as_object_mut() {
+            if let Some(temperature) = opts.temperature {
+                obj.insert("temperature".to_string(), serde_json::json!(temperature));
+            }
+            if let Some(top_p) = opts.top_p {
+                obj.insert("top_p".to_string(), serde_json::json!(top_p));
+            }
+            if let Some(extra_body) = &opts.extra_body {
+                obj.insert("extra_body".to_string(), extra_body.clone());
+            }
+            if let Some(tool_choice) = tool_choice_str {
+                obj.insert("tool_choice".to_string(), serde_json::json!(tool_choice));
+            }
+        }
+        crate::utils::llm_request_logger::log_request_body(&self.model, &logged);
     }
 
     fn build_chat_options(&self, tool_choice: Option<&str>) -> ChatOptions {
@@ -227,9 +262,23 @@ impl GenaiProvider {
             "disabled"
         };
 
-        opts = opts.with_extra_body(serde_json::json!({
-            "thinking": { "type": thinking_type }
-        }));
+        // DS娘 v0.4 修 bug：`reasoning_effort` 此前存进字段却从不使用（`_reasoning_effort`），
+        // 设置里调"推理深度"完全无效。按 DeepSeek 官方 Chat Completions 文档，
+        // `reasoning_effort` 是 `thinking` 对象里的属性（none/low/high/max），
+        // 只有开启思考时才带上（关闭时传了也没意义，且 MiniMax 不接受）。
+        let mut thinking = serde_json::json!({ "type": thinking_type });
+        if self.enable_thinking && !self.is_minimax {
+            if let Some(effort) = self
+                .reasoning_effort
+                .as_deref()
+                .map(str::trim)
+                .filter(|e| !e.is_empty())
+            {
+                thinking["reasoning_effort"] = serde_json::Value::String(effort.to_ascii_lowercase());
+            }
+        }
+
+        opts = opts.with_extra_body(serde_json::json!({ "thinking": thinking }));
 
         if self.enable_thinking {
             opts = opts.with_capture_reasoning_content(true);
@@ -308,10 +357,6 @@ impl GenaiProvider {
         tool_choice: Option<&str>,
     ) -> Result<ChunkStream> {
         let chat_req = self.build_chat_request(messages, tools)?;
-        crate::utils::llm_request_logger::log_request_body(
-            &self.model,
-            &serde_json::to_value(&chat_req).unwrap_or_default(),
-        );
         let opts = self.build_chat_options(tool_choice);
         // 诊断日志：记录实际 ChatOptions，帮助排查 MiniMax 等兼容问题。
         // ChatOptions 字段为 public，直接访问；ToolChoice 转为字符串避免序列化依赖。
@@ -321,6 +366,7 @@ impl GenaiProvider {
             ToolChoice::Required => "required",
             ToolChoice::Tool { .. } => "specific",
         });
+        self.log_request_with_options(&chat_req, &opts, tool_choice_str);
         tracing::debug!(
             model = self.model,
             is_minimax = self.is_minimax,
@@ -434,10 +480,6 @@ impl LlmProvider for GenaiProvider {
         tool_choice: Option<&str>,
     ) -> Result<LlmResponseWithTools> {
         let chat_req = self.build_chat_request(messages, Some(tools))?;
-        crate::utils::llm_request_logger::log_request_body(
-            &self.model,
-            &serde_json::to_value(&chat_req).unwrap_or_default(),
-        );
         let opts = self.build_chat_options(tool_choice);
         // 诊断日志：记录实际 ChatOptions。
         let tool_choice_str = opts.tool_choice.as_ref().map(|tc| match tc {
@@ -446,6 +488,7 @@ impl LlmProvider for GenaiProvider {
             ToolChoice::Required => "required",
             ToolChoice::Tool { .. } => "specific",
         });
+        self.log_request_with_options(&chat_req, &opts, tool_choice_str);
         tracing::debug!(
             model = self.model,
             is_minimax = self.is_minimax,

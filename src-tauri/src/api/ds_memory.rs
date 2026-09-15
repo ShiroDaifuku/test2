@@ -90,6 +90,124 @@ pub async fn ds_set_notes(app: tauri::AppHandle, notes: Value) -> Result<(), Str
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Persona 运行时状态 + 检索式记忆（DS娘 v0.4 · 前端写入，prompt 组装时读取）
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 前端状态层渲染好的【当前状态】文本 */
+const PERSONA_STATE_FILE: &str = "persona_state.json";
+/** 前端检索器本轮挑出的【相关记忆】文本 */
+const MEMORY_RECALL_FILE: &str = "memory_recall.json";
+
+fn runtime_file_path(name: &str) -> std::path::PathBuf {
+    crate::api::data_dir().join("game_data").join(name)
+}
+
+fn read_runtime_json(name: &str) -> Option<Value> {
+    let content = std::fs::read_to_string(runtime_file_path(name)).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn write_runtime_json(name: &str, value: &Value) -> Result<(), String> {
+    let path = runtime_file_path(name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {e}"))?;
+    }
+    let content = serde_json::to_string_pretty(value).map_err(|e| format!("序列化失败: {e}"))?;
+    crate::ai_service::tools::atomic_replace(&path, content.as_bytes())
+}
+
+/// 把「运行时状态」与「本轮检索到的相关记忆」拼到记忆库段落后面。
+///
+/// - `bank_text` 是记忆库三段（`taの信息/重要约定/长期经历`）的常规全量文本；
+/// - 若 `memory_recall.json` 里 `replaceBank = true`，说明前端已经做过检索，
+///   **不再全量注入记忆库**，只注入检索到的少量条目（对齐任务书 §17「存储多、检索少」）；
+/// - 状态文本永远附加（"心情/关系"与记忆库是两件事，见任务书 §18）。
+pub(crate) fn compose_runtime_addendum(bank_text: &str) -> String {
+    let recall = read_runtime_json(MEMORY_RECALL_FILE);
+    let replace_bank = recall
+        .as_ref()
+        .and_then(|v| v.get("replaceBank"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let mut parts: Vec<String> = Vec::new();
+    if !replace_bank && !bank_text.trim().is_empty() {
+        parts.push(bank_text.trim_end().to_string());
+    }
+    if let Some(state_text) = read_runtime_json(PERSONA_STATE_FILE)
+        .and_then(|v| v.get("text").and_then(Value::as_str).map(str::to_string))
+    {
+        if !state_text.trim().is_empty() {
+            parts.push(state_text.trim_end().to_string());
+        }
+    }
+    if let Some(recall_text) = recall
+        .as_ref()
+        .and_then(|v| v.get("text").and_then(Value::as_str).map(str::to_string))
+    {
+        if !recall_text.trim().is_empty() {
+            parts.push(recall_text.trim_end().to_string());
+        }
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!("\n\n{}", parts.join("\n\n"))
+}
+
+/// 保存状态层渲染的文本（前端每轮/启动时调用）。
+#[tauri::command]
+pub async fn ds_set_persona_state(text: String, state: Option<Value>) -> Result<(), String> {
+    write_runtime_json(
+        PERSONA_STATE_FILE,
+        &json!({
+            "text": text,
+            "state": state,
+            "updatedAt": chrono::Utc::now().timestamp_millis(),
+        }),
+    )
+}
+
+/// 保存本轮检索到的相关记忆；`replace_bank = true` 表示本轮不要全量注入记忆库。
+#[tauri::command]
+pub async fn ds_set_memory_recall(
+    text: String,
+    replace_bank: Option<bool>,
+    stats: Option<Value>,
+) -> Result<(), String> {
+    write_runtime_json(
+        MEMORY_RECALL_FILE,
+        &json!({
+            "text": text,
+            "replaceBank": replace_bank.unwrap_or(true),
+            "stats": stats,
+            "updatedAt": chrono::Utc::now().timestamp_millis(),
+        }),
+    )
+}
+
+/// 读出**当前角色**的记忆库四段，供前端检索器当候选池用。
+#[tauri::command]
+pub async fn ds_get_memory_bank(app: tauri::AppHandle) -> Result<Value, String> {
+    let gs_handle = game_status_handle(&app).await;
+    let gs = gs_handle.lock().await;
+    let role_id = gs
+        .current_role_id
+        .ok_or_else(|| "当前没有选中对话角色，无法读取记忆库".to_string())?;
+    let role = gs
+        .role_manager
+        .get_loaded(role_id)
+        .ok_or_else(|| format!("当前角色（role_id={role_id}）尚未加载完成，无法读取记忆库"))?;
+    let data = &role.memory_bank.data;
+    Ok(json!({
+        "short_term": data.short_term,
+        "long_term": data.long_term,
+        "user_info": data.user_info,
+        "promises": data.promises,
+    }))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MemoryBank 段落导入（DS娘 v0.4 · 旧版记忆一次性并入）
 // ─────────────────────────────────────────────────────────────────────────────
 

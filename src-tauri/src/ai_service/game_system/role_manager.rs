@@ -307,7 +307,7 @@ impl GameRoleManager {
             );
 
             // 阶段 2: MemoryBank 启用时 — 同步后台结果 + 触发压缩 + 获取记忆文本
-            let (mb_exists, slice_start, system_addendum, short_term_prefix) = {
+            let (mb_exists, slice_start, bank_text, short_term_prefix) = {
                 let sys = self.memory_bank_systems.get(&rid);
                 match sys {
                     Some(s) if s.is_enabled() => {
@@ -325,6 +325,14 @@ impl GameRoleManager {
                     None => (false, 0, String::new(), String::new()),
                 }
             };
+
+            // DS娘 v0.4：把「运行时状态（心情/关系）」与「本轮检索到的相关记忆」拼进 system 段。
+            // - 记忆库是否注入三段的常规文本，由 `mb_exists && mb_enabled` 决定；
+            // - 若前端已做检索（memory_recall.json 里 replaceBank=true），则**跳过全量三段**，
+            //   只注入检索到的少量条目（任务书 §17「存储多、检索少」）；
+            // - 状态文本与检索结果独立于记忆库开关，即使记忆库被关掉也照常注入。
+            let bank_for_inject = if mb_exists && mb_enabled { bank_text.as_str() } else { "" };
+            let system_addendum = crate::api::ds_memory::compose_runtime_addendum(bank_for_inject);
 
             // 阶段 3: 裁剪 + 构建角色记忆
             let sliced: Vec<GameLine> = if slice_start > 0 && slice_start <= source_lines.len() {
@@ -348,7 +356,8 @@ impl GameRoleManager {
 
             // 阶段 4: 写入角色记忆
             if let Some(role) = self.loaded_roles.get_mut(&rid) {
-                let use_mb = mb_exists && mb_enabled && !system_addendum.is_empty();
+                // v0.4：system_addendum 现在包含记忆库/状态/检索三部分，非空即注入
+                let use_mb = !system_addendum.is_empty();
                 role.memory = if use_mb {
                     Self::merge_memory_bank_into_context(
                         built,

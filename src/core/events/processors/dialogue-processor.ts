@@ -7,6 +7,23 @@ import { isJaLocale, hkify } from "@/locales";
 import { resolveEmotion } from "@/api/ds-emotion";
 import { recordChat } from "@/api/ds-silent-log";
 import { scheduleCloudSync } from "@/api/ds-cloud-sync";
+import { updatePersonaStateAfterTurn } from "@/api/ds-persona-state";
+
+/**
+ * 本轮回复里出现的情绪标签（一次回复可能多句、每句一个标签）。
+ * 收集到 `isFinal` 时一次性喂给状态层，避免同一轮被反复计入。
+ */
+let turnEmotions: string[] = [];
+
+/** 取最近一条用户消息文本（状态层判断"他这句是什么情绪"要用） */
+function lastUserText(gameStore: { dialogHistory: Array<{ type?: string; content?: string }> }): string {
+  const history = gameStore.dialogHistory || [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const message = history[i];
+    if (message?.type === "message" && typeof message.content === "string") return message.content;
+  }
+  return "";
+}
 
 export default class DialogueProcessor implements IEventProcessor {
   canHandle(eventType: string): boolean {
@@ -42,6 +59,8 @@ export default class DialogueProcessor implements IEventProcessor {
     // 记的是「最终情绪」（含小模型兜底结果），这样日志与当时界面上看到的立绘一致
     if (event.message) {
       recordChat({ role: "ai", text: event.message, emotion: finalEmotion, seq: event.userMessageSeq });
+      // 状态层：只统计真正有台词的那几句的情绪
+      turnEmotions.push(finalEmotion);
     } else if (event.motionText) {
       recordChat({ role: "action", text: event.motionText, seq: event.userMessageSeq });
     }
@@ -96,7 +115,14 @@ export default class DialogueProcessor implements IEventProcessor {
 
     // DS娘 v0.4：本轮的收尾句到达 ⇒ 视为"一轮对话完成"，静默触发云同步
     // （scheduleCloudSync 内部 3 秒防抖 + 失败静默，绝不会打断对话）
-    if (event.isFinal) scheduleCloudSync("dialogue");
+    if (event.isFinal) {
+      scheduleCloudSync("dialogue");
+      // 状态层（P2）：用「他的消息 + 她这轮用到的情绪标签」推进心情/关系，
+      // 内部走衰减 → 限幅(max_delta) → 钳位，并落盘 + 推给 Rust 供下一轮注入。
+      const tags = turnEmotions.slice();
+      turnEmotions = [];
+      void updatePersonaStateAfterTurn({ userText: lastUserText(gameStore), emotionTags: tags });
+    }
 
     // 对话总是等待用户继续，所以这里不需要做任何等待
     // event-queue 会自动检测到这是对话事件并等待用户继续

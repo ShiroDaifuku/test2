@@ -866,6 +866,10 @@ pub fn run() {
             api::ds_memory::ds_set_notes,
             // DS娘 v0.4：把云端「旧版记忆」一次性并入当前角色 MemoryBank 段落
             api::ds_memory::ds_import_memory_sections,
+            // DS娘 v0.4：Persona 运行时状态 + 检索式记忆（前端写、prompt 组装读）
+            api::ds_memory::ds_set_persona_state,
+            api::ds_memory::ds_set_memory_recall,
+            api::ds_memory::ds_get_memory_bank,
             api::proactive_set_can_deliver,
             api::tool_settings::get_tool_settings,
             api::tool_settings::get_tool_runtime_info,

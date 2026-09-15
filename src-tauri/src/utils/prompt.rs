@@ -88,6 +88,15 @@ const DIALOG_FORMAT_PROMPT_2_EMOTION_LIMIT_HEAD: &str = indoc! {r#"
         你声明自己情况的情绪不能过长，约2-5个字左右，比如"慌张、难为情"等等。绝对不要在【】里的情绪标签出现动作或主语！只允许情绪。
 "#};
 
+/// 「放开情绪列表」（`PromptOptions.no_emotion_limit = true`）时用的头部：
+/// 不再限定固定词表，但仍然要求"只放情绪、2-5 字、不许动作和主语"。
+/// DS娘 v0.4 修的 bug：这个开关此前只被传入、从未被 `sys_prompt_builder` 读取，
+/// 用户在设置里关掉情绪限制其实没有任何效果；现在按开关选择头部。
+const DIALOG_FORMAT_PROMPT_2_EMOTION_FREE_HEAD: &str = indoc! {r#"
+        每句话开头的【情绪】用 2-5 个字形容你当时的心情，比如"慌张、难为情、兴奋"等等。
+        绝对不要在【】里的情绪标签出现动作或主语！只允许情绪，同一个标签也不要连着用太多次。
+"#};
+
 const DIALOG_FORMAT_PROMPT_2_BODY: &str = indoc! {r#"
 
         你的每一次回复不要只有一两个台词，你可以根据对话需求调整自己的回复总台词数量。你的每次回复最好由3~5个台词组成，根据情况适时调整。不宜太长（如超过六句）也不宜太短（如少于二句）。
@@ -185,7 +194,13 @@ pub fn sys_prompt_builder(
     ai_prompt_example_old: Option<&str>,
     options: PromptOptions,
 ) -> String {
-    let emotion_head = DIALOG_FORMAT_PROMPT_2_EMOTION_LIMIT_HEAD;
+    // DS娘 v0.4：这里原来无条件使用白名单头部，`options.no_emotion_limit` 被传入却从未读取，
+    // 设置里的「放开情绪列表」是死的。现在按开关在"白名单"和"自由情绪"两个头部之间选择。
+    let emotion_head = if options.no_emotion_limit {
+        DIALOG_FORMAT_PROMPT_2_EMOTION_FREE_HEAD
+    } else {
+        DIALOG_FORMAT_PROMPT_2_EMOTION_LIMIT_HEAD
+    };
 
     let example_cn = ai_prompt_example.filter(|s| !s.is_empty());
     let example_jp = ai_prompt_example_old.filter(|s| !s.is_empty());

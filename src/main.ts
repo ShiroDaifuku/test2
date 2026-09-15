@@ -19,6 +19,7 @@ import { initAudioOutputManager } from "./utils/audioOutputManager";
 import { bootstrapDeepSeek } from "./api/ds-bootstrap";
 import { scheduleCloudSync } from "./api/ds-cloud-sync";
 import { initTodoReminders } from "./api/ds-todo-reminder";
+import { refreshPersonaStateOnStart } from "./api/ds-persona-state";
 
 // 仅主窗口启动时清除加载过渡标记，避免设置窗口等其他窗口误清除
 if (getCurrentWindow().label === "main") {
@@ -51,6 +52,10 @@ setTimeout(() => scheduleCloudSync("startup"), 3000);
 
 // DS娘 v0.4：待办到点提醒（系统级通知；AI 改待办后由 Rust 事件即刻重排）
 initTodoReminders();
+
+// DS娘 v0.4：Persona 状态层——启动时做一次时间衰减并推给 Rust，
+// 保证每轮 system prompt 里都有一段【当前状态】（心情/关系）
+void refreshPersonaStateOnStart();
 
 // 初始化全局音频输出设备管理器（需 pinia 就绪）
 initAudioOutputManager();

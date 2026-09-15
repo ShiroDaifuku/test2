@@ -38,6 +38,7 @@
   import { useGameStore } from "@/stores/modules/game";
   import { invoke } from "@tauri-apps/api/core";
   import { eventQueue } from "@/core/events/event-queue";
+  import { prepareTurnRecall } from "@/api/ds-memory-recall";
 
   interface BodyPart {
     X: number[];
@@ -247,6 +248,8 @@
             message = defaultMessage;
           }
 
+          // DS娘 v0.4：发送前按这句话检索相关记忆（失败静默）
+          void prepareTurnRecall(message);
           invoke("send_chat_message", { text: message })
             .then(() => {
               // 发送成功，状态由后端事件驱动更新
