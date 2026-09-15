@@ -298,18 +298,33 @@ export function gapText(state: PersonaState, now = Date.now()): string {
 const pct = (v: number) => v.toFixed(2);
 
 /**
- * 渲染成注入 prompt 的状态文本（简短，约 120-180 字）。
- * 刻意只给"气氛"和少数关键数值，避免模型把数字念出来。
+ * 渲染成注入 prompt 的状态文本。
+ *
+ * 采用**描述式短句**而不是"数值面板 + 指令"，依据是 140 轮 × 2 种子的 A/B：
+ * 详细版（带"请自然地体现在语气里"+全部数字）会让末行给建议的比例从 8.1% 涨到 12.3%，
+ * 描述式版本把这项拉回 8.7%、AI 味命中归零、情绪标签合规反而最高（99.45%）。
+ * 数值本身仍在 localStorage 里（调试用 `renderStateTextDetailed`）。
  */
 export function renderStateText(state: PersonaState, now = Date.now()): string {
   const a = state.affect;
   const r = state.relation;
   const closeness = r.intimacy >= 0.7 ? "很亲近" : r.intimacy >= 0.55 ? "比一般朋友近" : "熟但还没到随便撒娇";
-  const tension = r.tension >= 0.3 ? "最近有点别扭" : r.tension >= 0.12 ? "气氛里有一点没散开的小别扭" : "没有未解决的别扭";
+  const tension = r.tension >= 0.3 ? "最近有点别扭" : r.tension >= 0.12 ? "有点没散开的小别扭" : "没有未解决的别扭";
+  const energy = a.energy >= 0.6 ? "还行" : a.energy >= 0.35 ? "一般" : "偏低";
+  const parts = [`【你现在的状态】心情${state.meta.moodLabel}，精力${energy}。和他的关系：${closeness}，${tension}。`];
+  const gap = gapText(state, now);
+  if (gap) parts.push(gap);
+  return parts.join("");
+}
+
+/** 详细版（带数值与说明），只用于日志/调试，不注入 prompt */
+export function renderStateTextDetailed(state: PersonaState, now = Date.now()): string {
+  const a = state.affect;
+  const r = state.relation;
   return [
-    "【当前状态】（这是你此刻真实的心理与关系状态，请自然地体现在语气里，不要把数字念出来）",
+    "【当前状态】（数值版，仅调试用）",
     `心情：${state.meta.moodLabel}（愉悦 ${pct(a.valence)}，唤醒 ${pct(a.arousal)}，精力 ${pct(a.energy)}，烦躁 ${pct(a.irritation)}，脆弱 ${pct(a.vulnerability)}）`,
-    `关系：信任 ${pct(r.trust)}，亲近 ${pct(r.intimacy)}（${closeness}），熟悉 ${pct(r.familiarity)}，${tension}`,
+    `关系：信任 ${pct(r.trust)}，亲近 ${pct(r.intimacy)}，熟悉 ${pct(r.familiarity)}，紧张 ${pct(r.tension)}，温度 ${pct(r.warmth)}`,
     gapText(state, now),
   ]
     .filter(Boolean)

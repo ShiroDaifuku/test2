@@ -20,9 +20,17 @@ export interface PersonaFlags {
 
 const STORAGE_KEY = "ds_persona_flags";
 
-/** 默认值：等人工盲评后再改这里或写 localStorage 覆盖 */
+/**
+ * 默认值（依据 _diag/persona-eval 的 140 轮 × 2 种子 A/B 定）：
+ *   - dynamicState = true ：描述式状态段把 AI 味命中从 0.30/千字降到 0.00，
+ *                            末行建议率回到基线水平（8.7% vs 8.1%），情绪标签合规最高（99.45%），
+ *                            末行问句率与基线持平（20.1% vs 19.5%）。
+ *   - memoryRetrieval = false：检索每轮省 ~2.0k tokens（我们真实库 ≈2550 字符），
+ *                            但会让末行问句率从 19.5% 涨到 27.6%、AI 味升到 0.59/千字；
+ *                            K=8 也修不好（问句率与 K=4 相同）。收益（省钱）不抵质量回退，暂不启用。
+ */
 const DEFAULTS: PersonaFlags = {
-  dynamicState: false,
+  dynamicState: true,
   memoryRetrieval: false,
 };
 
