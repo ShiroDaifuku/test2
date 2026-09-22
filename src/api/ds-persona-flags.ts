@@ -1,12 +1,12 @@
 /**
  * DS娘 v0.4 · Persona Engine 功能开关（对齐任务书 §10：所有新模块必须能随时切回 baseline）
  *
- * 默认值 = **关闭**，因为这两项在 140 轮客观指标上是"混合结果"，
- * 需要人工盲评（`_diag/persona-eval/report/`）确认后再逐个打开：
+ * build6 默认只打开已经通过客观指标复核的动态状态层；记忆检索仍保持关闭，
+ * 等人工盲评确认不会提高问句率和 AI 味后再单独放量：
  *   - dynamicState   ：心情/关系状态层（情绪标签驱动，零额外 API）
  *   - memoryRetrieval：检索式记忆注入（top-K 命中替换全量注入，省 ~3.4k tokens/轮）
  *
- * 打开方式（任一）：
+ * 设置入口：高级设置 → DS娘 → Persona Engine。也可用于调试：
  *   localStorage.setItem("ds_persona_flags", JSON.stringify({ dynamicState: true, memoryRetrieval: true }))
  * 或由后续版本把 DEFAULTS 改成 true。
  *

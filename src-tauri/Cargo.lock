@@ -4247,7 +4247,7 @@ dependencies = [
 
 [[package]]
 name = "ling_chat"
-version = "0.5.1"
+version = "0.4.0-beta.6"
 dependencies = [
  "anyhow",
  "ash",

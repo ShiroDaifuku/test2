@@ -366,7 +366,7 @@ export async function pushStateToApp(state: PersonaState, now = Date.now()): Pro
   }
 }
 
-/** 一轮结束后：更新 → 落盘 → 推送。受 `dynamicState` 开关控制（默认关，见 ds-persona-flags.ts） */
+/** 一轮结束后：更新 → 落盘 → 推送。受 `dynamicState` 开关控制（build6 默认开）。 */
 export async function updatePersonaStateAfterTurn(signals: TurnSignals): Promise<PersonaState | null> {
   if (!personaFlag("dynamicState")) return null;
   const now = signals.now ?? Date.now();

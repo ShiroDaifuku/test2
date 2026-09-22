@@ -22,6 +22,12 @@ cd "$ROOT"
 
 GEN_APPLE="src-tauri/gen/apple"
 
+# release.json 是产品版本的单一事实来源。Tauri/Cargo/npm 使用完整 SemVer，
+# iOS 则按 Apple 要求拆成纯数字 MARKETING_VERSION 与递增构建号。
+node scripts/check-version-sync.mjs
+IOS_MARKETING_VERSION="$(node -p "require('./release.json').iosMarketingVersion")"
+IOS_BUILD_NUMBER="$(node -p "require('./release.json').iosBuildNumber")"
+
 # --- 1. Initialize the Xcode project ----------------------------------------
 
 if [ ! -d "$GEN_APPLE" ]; then
@@ -56,7 +62,18 @@ fi
 COUNT="$(grep -c 'TARGETED_DEVICE_FAMILY = "1,2"' "$PBXPROJ" || true)"
 echo "[configure-ios] TARGETED_DEVICE_FAMILY=\"1,2\" occurrences: $COUNT"
 
-# --- 3. Verify the iOS-specific Info.plist merge hook ------------------------
+# --- 3. Apply release identity ------------------------------------------------
+
+if grep -q "MARKETING_VERSION" "$PBXPROJ" && grep -q "CURRENT_PROJECT_VERSION" "$PBXPROJ"; then
+  sed -i '' -E "s/MARKETING_VERSION = [^;]+;/MARKETING_VERSION = ${IOS_MARKETING_VERSION};/g" "$PBXPROJ"
+  sed -i '' -E "s/CURRENT_PROJECT_VERSION = [^;]+;/CURRENT_PROJECT_VERSION = ${IOS_BUILD_NUMBER};/g" "$PBXPROJ"
+  echo "[configure-ios] release identity: ${IOS_MARKETING_VERSION} (${IOS_BUILD_NUMBER})"
+else
+  echo "[configure-ios] ERROR: MARKETING_VERSION/CURRENT_PROJECT_VERSION missing in pbxproj" >&2
+  exit 1
+fi
+
+# --- 4. Verify the iOS-specific Info.plist merge hook ------------------------
 
 if [ -f "src-tauri/Info.ios.plist" ]; then
   echo "[configure-ios] src-tauri/Info.ios.plist present (Files-app visibility + device family); it is merged into Info.plist on every tauri ios build"
@@ -64,7 +81,7 @@ else
   echo "[configure-ios] WARNING: src-tauri/Info.ios.plist missing (UIFileSharingEnabled etc. will be absent)" >&2
 fi
 
-# --- 4. Bypass pnpm in the "Build Rust Code" Xcode phase ---------------------
+# --- 5. Bypass pnpm in the "Build Rust Code" Xcode phase ---------------------
 # tauri ios init 在 pnpm 环境下会把 tauri-binary 渲染为 `pnpm`，于是 Xcode 脚本
 # 阶段执行 `pnpm tauri ... xcode-script ...`。pnpm 11 的 verify-deps-before-run
 # 会先跑一次自动 `pnpm install`；模块目录需要清空重装时，在无 TTY 环境下直接
@@ -83,7 +100,7 @@ else
   echo "[configure-ios] Build Rust Code phase: no 'pnpm tauri' prefix found (already patched or not pnpm-wrapped)"
 fi
 
-# --- 5. Sync AppIcon from src-tauri/icons/ios --------------------------------
+# --- 6. Sync AppIcon from src-tauri/icons/ios --------------------------------
 # gen/apple 是本地持久产物（gitignored），configure 时若已存在会跳过 init，
 # 图标可能停留在旧版本（Android 每次都由 tauri icon 按 icon.png 重新生成）。
 # 这里把 src-tauri/icons/ios/（tauri icon 的输出，与 Android 同源 icon.png）
@@ -99,7 +116,7 @@ else
     "run 'pnpm run init' first (generates src-tauri/icons/ios via 'tauri icon')" >&2
 fi
 
-# --- 6. Show the patched shell script for verification -----------------------
+# --- 7. Show the patched shell script for verification -----------------------
 
 echo "[configure-ios] Build Rust Code shellScript (first 220 chars):"
 grep -o 'shellScript = ".*' "$PBXPROJ" | head -3 | cut -c1-220 || true

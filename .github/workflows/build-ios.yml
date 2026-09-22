@@ -1,4 +1,5 @@
 name: iOS 无签名 IPA 构建
+run-name: DS娘 build6 · iOS 无签名 IPA
 
 on:
   workflow_dispatch:
@@ -57,6 +58,7 @@ jobs:
       - name: 初始化（图标 + 下载情绪模型）
         run: |
           pnpm install
+          node scripts/check-version-sync.mjs
           pnpm run init
 
       - name: 打包与构建无签名 IPA

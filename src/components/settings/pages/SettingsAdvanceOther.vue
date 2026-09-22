@@ -128,6 +128,17 @@
             </p>
           </section>
 
+          <section
+            v-if="activeSelection.subcategory === PERSONA_SUBCATEGORY"
+            class="mb-6 rounded-xl border border-white/10 bg-black/15 p-4"
+          >
+            <h3 class="mb-1 text-base font-semibold text-white">Persona 配置导出</h3>
+            <p class="mb-3 text-sm leading-6 text-white/65">
+              复制当前功能开关 JSON，便于测试记录、问题复现和回滚。记忆检索在 build6 中默认关闭。
+            </p>
+            <Button type="big" @click="copyPersonaConfig">复制配置 JSON</Button>
+          </section>
+
           <!-- 保存操作区域 -->
           <div
             class="bg-brand inline-flex min-w-30 cursor-pointer flex-col gap-2 rounded-lg
@@ -171,6 +182,13 @@
   import { reactivateTTS } from "@/api/services/game-info";
   import { switchLlm } from "@/api/services/llm-providers";
   import { RefreshCw } from "lucide-vue-next";
+  import { invoke } from "@tauri-apps/api/core";
+  import { personaFlags, setPersonaFlag } from "@/api/ds-persona-flags";
+  import { refreshPersonaStateOnStart } from "@/api/ds-persona-state";
+
+  const PERSONA_SUBCATEGORY = "Persona Engine";
+  const PERSONA_DYNAMIC_KEY = "ds.persona_dynamic_state";
+  const PERSONA_MEMORY_KEY = "ds.persona_memory_retrieval";
 
   // --- 响应式状态定义 ---
   const uiStore = useUIStore();
@@ -257,7 +275,28 @@
     saveStatus.message = "";
 
     try {
-      saveStatus.message = (await saveEnvConfigSettings(formData)).message;
+      if (activeSelection.subcategory === PERSONA_SUBCATEGORY) {
+        const dynamicState = formData[PERSONA_DYNAMIC_KEY] === "true";
+        const memoryRetrieval = formData[PERSONA_MEMORY_KEY] === "true";
+        setPersonaFlag("dynamicState", dynamicState);
+        setPersonaFlag("memoryRetrieval", memoryRetrieval);
+
+        if (dynamicState) {
+          await refreshPersonaStateOnStart();
+        } else {
+          await invoke("ds_set_persona_state", { text: "", state: null });
+        }
+        if (!memoryRetrieval) {
+          await invoke("ds_set_memory_recall", {
+            text: "",
+            replaceBank: false,
+            stats: null,
+          });
+        }
+        saveStatus.message = "Persona 开关已保存；关闭的运行时注入已立即清除。";
+      } else {
+        saveStatus.message = (await saveEnvConfigSettings(formData)).message;
+      }
       if (Object.prototype.hasOwnProperty.call(formData, "llm.timeout_secs")) {
         await switchLlm();
       }
@@ -272,6 +311,47 @@
       setTimeout(() => {
         saveStatus.message = "";
       }, 5000);
+    }
+  };
+
+  const injectPersonaSettings = () => {
+    const flags = personaFlags();
+    const dsCategory = (configData.value["DS娘"] ??= { subcategories: {} });
+    dsCategory.subcategories[PERSONA_SUBCATEGORY] = {
+      description:
+        "build6 的 Persona 实验开关。动态状态默认开启；检索式记忆仍处于评估阶段，默认关闭。",
+      settings: [
+        {
+          key: PERSONA_DYNAMIC_KEY,
+          value: String(flags.dynamicState),
+          description: "动态状态层 — 把心情、精力、信任与亲密度注入当前对话（默认开启）",
+          setting_type: "bool",
+        },
+        {
+          key: PERSONA_MEMORY_KEY,
+          value: String(flags.memoryRetrieval),
+          description: "检索式记忆 — 仅注入 Top-K 相关记忆；build6 默认关闭，供受控测试",
+          setting_type: "bool",
+        },
+      ],
+    };
+  };
+
+  const copyPersonaConfig = async () => {
+    try {
+      const payload = {
+        schema: "ds-persona-flags/v1",
+        release: "0.4.0-beta.6",
+        exportedAt: new Date().toISOString(),
+        flags: personaFlags(),
+      };
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      saveStatus.message = "Persona 配置 JSON 已复制。";
+      saveStatus.colorClass = "text-green-500";
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      saveStatus.message = `复制失败：${message}`;
+      saveStatus.colorClass = "text-red-500";
     }
   };
 
@@ -309,6 +389,7 @@
     isLoading.value = true;
     try {
       configData.value = await getEnvConfigSettings();
+      injectPersonaSettings();
 
       if (selectFirst && Object.keys(configData.value).length > 0) {
         const firstCategory = Object.keys(configData.value)[0];
