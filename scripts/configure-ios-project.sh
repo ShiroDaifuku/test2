@@ -64,14 +64,8 @@ echo "[configure-ios] TARGETED_DEVICE_FAMILY=\"1,2\" occurrences: $COUNT"
 
 # --- 3. Apply release identity ------------------------------------------------
 
-if grep -q "MARKETING_VERSION" "$PBXPROJ" && grep -q "CURRENT_PROJECT_VERSION" "$PBXPROJ"; then
-  sed -i '' -E "s/MARKETING_VERSION = [^;]+;/MARKETING_VERSION = ${IOS_MARKETING_VERSION};/g" "$PBXPROJ"
-  sed -i '' -E "s/CURRENT_PROJECT_VERSION = [^;]+;/CURRENT_PROJECT_VERSION = ${IOS_BUILD_NUMBER};/g" "$PBXPROJ"
-  echo "[configure-ios] release identity: ${IOS_MARKETING_VERSION} (${IOS_BUILD_NUMBER})"
-else
-  echo "[configure-ios] ERROR: MARKETING_VERSION/CURRENT_PROJECT_VERSION missing in pbxproj" >&2
-  exit 1
-fi
+node scripts/patch-ios-release.mjs "$PBXPROJ"
+echo "[configure-ios] release identity: ${IOS_MARKETING_VERSION} (${IOS_BUILD_NUMBER})"
 
 # --- 4. Verify the iOS-specific Info.plist merge hook ------------------------
 
