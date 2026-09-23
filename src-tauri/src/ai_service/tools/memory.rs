@@ -28,6 +28,16 @@ pub struct Note {
     #[serde(default)]
     pub tags: Vec<String>,
     pub created_at: String,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    /// 笔记描述的事件发生/计划时间；与“这条笔记何时创建”分开。
+    #[serde(default)]
+    pub event_at: Option<String>,
+    #[serde(default)]
+    pub timezone: Option<String>,
+    /// true 表示只有记录时间，无法可靠推断事件本身的绝对时间。
+    #[serde(default)]
+    pub time_uncertain: bool,
 }
 
 fn notes_dir() -> PathBuf {
@@ -163,13 +173,47 @@ fn require_object<'a>(
         .ok_or_else(|| ToolError::InvalidArguments(format!("{tool} 参数必须是 JSON object")))
 }
 
-fn apply_note_update(note: &mut Note, content: Option<String>, tags: Option<Vec<String>>) {
+fn parse_event_at(value: Option<&Value>, tool: &str) -> Result<Option<String>, ToolError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let raw = value
+        .as_str()
+        .ok_or_else(|| ToolError::InvalidArguments(format!("{tool} 的 event_at 必须是字符串")))?
+        .trim();
+    if raw.is_empty() {
+        return Ok(Some(String::new()));
+    }
+    let valid = chrono::DateTime::parse_from_rfc3339(raw).is_ok()
+        || chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d").is_ok()
+        || chrono::NaiveDateTime::parse_from_str(&raw.replace('T', " "), "%Y-%m-%d %H:%M").is_ok();
+    if !valid {
+        return Err(ToolError::InvalidArguments(format!(
+            "{tool} 的 event_at 必须是绝对时间（YYYY-MM-DD、YYYY-MM-DD HH:MM 或 RFC3339）；相对时间须先调用 get_current_time 换算"
+        )));
+    }
+    Ok(Some(raw.to_string()))
+}
+
+fn apply_note_update(
+    note: &mut Note,
+    content: Option<String>,
+    tags: Option<Vec<String>>,
+    event_at: Option<String>,
+) {
     if let Some(content) = content {
         note.content = content;
     }
     if let Some(tags) = tags {
         note.tags = tags;
     }
+    if let Some(event_at) = event_at {
+        note.event_at = if event_at.is_empty() { None } else { Some(event_at) };
+        note.time_uncertain = note.event_at.is_none();
+    }
+    let now = chrono::Local::now();
+    note.updated_at = Some(now.to_rfc3339());
+    note.timezone = Some(now.offset().to_string());
 }
 
 /// 取当前角色的权威名，供写操作定位笔记文件。返回后不持有锁。
@@ -276,12 +320,13 @@ impl Tool for AddNote {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::new(
             "memory_add_note",
-            "向当前角色添加一条手动记忆笔记，可附带标签（仅能写入当前角色的笔记）",
+            "向当前角色添加一条手动记忆笔记，可附带标签和事件绝对时间（仅能写入当前角色的笔记）。用户用了‘明天/下周’等相对日期时，先调用 get_current_time 换算后再写 event_at。",
             json!({
                 "type": "object",
                 "properties": {
                     "content": {"type": "string", "description": "笔记内容"},
-                    "tags": {"type": "array", "items": {"type": "string"}, "description": "标签，可选"}
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "标签，可选"},
+                    "event_at": {"type": "string", "description": "事件发生或计划的绝对时间，可选；YYYY-MM-DD、YYYY-MM-DD HH:MM 或 RFC3339，禁止相对日期"}
                 },
                 "required": ["content"],
                 "additionalProperties": false
@@ -306,14 +351,20 @@ impl Tool for AddNote {
             ));
         }
         let tags = parse_tags(obj.get("tags"), "memory_add_note")?.unwrap_or_default();
+        let event_at = parse_event_at(obj.get("event_at"), "memory_add_note")?.filter(|v| !v.is_empty());
 
         let role_name = current_role_name_for_write(context).await?;
         let mut notes = load_role_notes(&role_name).map_err(ToolError::Execution)?;
+        let now = chrono::Local::now();
         let note = Note {
             id: Uuid::new_v4().to_string(),
             content,
             tags,
-            created_at: chrono::Utc::now().to_rfc3339(),
+            created_at: now.to_rfc3339(),
+            updated_at: Some(now.to_rfc3339()),
+            time_uncertain: event_at.is_none(),
+            event_at,
+            timezone: Some(now.offset().to_string()),
         };
         let id = note.id.clone();
         notes.push(note);
@@ -330,13 +381,14 @@ impl Tool for UpdateNote {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::new(
             "memory_update_note",
-            "按 ID 更新当前角色的手动记忆笔记的内容或标签，至少提供一项（仅能修改当前角色的笔记）",
+            "按 ID 更新当前角色的手动记忆笔记的内容、标签或事件绝对时间，至少提供一项（仅能修改当前角色的笔记）",
             json!({
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "description": "笔记 ID"},
                     "content": {"type": "string", "description": "新的笔记内容，可选"},
-                    "tags": {"type": "array", "items": {"type": "string"}, "description": "新的标签，可选"}
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "新的标签，可选"},
+                    "event_at": {"type": "string", "description": "事件绝对时间；空字符串清除，禁止相对日期"}
                 },
                 "required": ["id"],
                 "additionalProperties": false
@@ -357,9 +409,10 @@ impl Tool for UpdateNote {
             .ok_or_else(|| ToolError::InvalidArguments("memory_update_note 需要 id".into()))?;
         let has_content = obj.get("content").is_some();
         let has_tags = obj.get("tags").is_some();
-        if !has_content && !has_tags {
+        let has_event_at = obj.get("event_at").is_some();
+        if !has_content && !has_tags && !has_event_at {
             return Err(ToolError::InvalidArguments(
-                "memory_update_note 至少需要 content/tags 中的一项".into(),
+                "memory_update_note 至少需要 content/tags/event_at 中的一项".into(),
             ));
         }
         let content = match obj.get("content") {
@@ -377,13 +430,14 @@ impl Tool for UpdateNote {
             None => None,
         };
         let tags = parse_tags(obj.get("tags"), "memory_update_note")?;
+        let event_at = parse_event_at(obj.get("event_at"), "memory_update_note")?;
 
         let role_name = current_role_name_for_write(context).await?;
         let mut notes = load_role_notes(&role_name).map_err(ToolError::Execution)?;
         let Some(note) = notes.iter_mut().find(|n| n.id == id) else {
             return Err(ToolError::Execution(format!("笔记 {id} 不存在")));
         };
-        apply_note_update(note, content, tags);
+        apply_note_update(note, content, tags, event_at);
         save_role_notes(&role_name, &notes).map_err(ToolError::Execution)?;
         Ok(json!({"ok": true, "id": id}))
     }

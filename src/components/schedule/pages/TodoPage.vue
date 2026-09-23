@@ -183,7 +183,11 @@
           :title="$t('ui.todoPage.remindAtHint')"
           @click.stop="remindEditingId = todo.id"
         >
-          {{ todo.remindAt ? "⏰ " + formatRemind(todo.remindAt) : "⏰ " + $t("ui.todoPage.remindNone") }}
+          {{
+            todo.remindAt
+              ? "⏰ " + formatRemind(todo.remindAt)
+              : "⏰ " + $t("ui.todoPage.remindNone")
+          }}
         </button>
       </div>
       <button @click.stop="removeItem(idx)" class="p-2 text-slate-200 hover:text-red-400">
@@ -239,8 +243,8 @@
         <input
           type="datetime-local"
           v-model="formData.remindAt"
-          class="w-full rounded-xl border-none bg-white px-3 py-2 text-sm text-slate-700 outline-none
-            focus:ring-2 focus:ring-cyan-500/50"
+          class="w-full rounded-xl border-none bg-white px-3 py-2 text-sm text-slate-700
+            outline-none focus:ring-2 focus:ring-cyan-500/50"
         />
         <span class="text-[11px] text-slate-400">{{ $t("ui.todoPage.remindAtHint") }}</span>
       </div>
@@ -283,6 +287,10 @@
     remindAt?: string;
     priority: number;
     completed: boolean;
+    createdAt?: string;
+    updatedAt?: string;
+    completedAt?: string;
+    timezone?: string;
   }
 
   interface TodoGroup {
@@ -297,6 +305,23 @@
   }
 
   const todoGroups = ref<Record<string, TodoGroup>>({});
+
+  const temporalMetadata = () => {
+    const now = new Date();
+    const offsetMinutes = -now.getTimezoneOffset();
+    const sign = offsetMinutes >= 0 ? "+" : "-";
+    const hh = String(Math.floor(Math.abs(offsetMinutes) / 60)).padStart(2, "0");
+    const mm = String(Math.abs(offsetMinutes) % 60).padStart(2, "0");
+    return { at: now.toISOString(), timezone: `${sign}${hh}:${mm}` };
+  };
+
+  const touchTodo = (todo: TodoItem) => {
+    const meta = temporalMetadata();
+    todo.createdAt ||= meta.at;
+    todo.updatedAt = meta.at;
+    todo.timezone = meta.timezone;
+    return meta;
+  };
 
   const loadData = async () => {
     try {
@@ -388,6 +413,8 @@
       const targetTodo = todoGroups.value[gid].todos.find((t) => t.id === todo.id);
       if (targetTodo) {
         targetTodo.completed = true;
+        const meta = touchTodo(targetTodo);
+        targetTodo.completedAt = meta.at;
       }
     }
   };
@@ -402,6 +429,8 @@
       const targetTodo = todoGroups.value[gid].todos.find((t) => t.id === todo.id);
       if (targetTodo) {
         targetTodo.completed = false;
+        touchTodo(targetTodo);
+        delete targetTodo.completedAt;
       }
     }
   };
@@ -444,6 +473,7 @@
     const v = String(value || "").trim();
     if (v) todo.remindAt = v.replace("T", " ");
     else delete todo.remindAt;
+    touchTodo(todo);
     remindEditingId.value = null;
   };
 
@@ -474,11 +504,15 @@
       if (selectedTodoGroupId.value) {
         const group = todoGroups.value[selectedTodoGroupId.value];
         if (group) {
+          const meta = temporalMetadata();
           group.todos.push({
             id: Date.now(),
             text: formData.todoText,
             priority: formData.priority,
             completed: false,
+            createdAt: meta.at,
+            updatedAt: meta.at,
+            timezone: meta.timezone,
             // datetime-local 的 "YYYY-MM-DDTHH:MM" → 存储用的 "YYYY-MM-DD HH:MM"
             ...(formData.remindAt ? { remindAt: formData.remindAt.replace("T", " ") } : {}),
           });

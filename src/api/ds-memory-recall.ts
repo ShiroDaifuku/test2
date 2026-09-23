@@ -30,6 +30,8 @@ export interface RecallCandidate {
   importance: number;
   /** 时间戳（毫秒），用于新近度；未知则 undefined */
   at?: number;
+  /** at 的语义：事件/截止时间可判定过去未来；记录时间只能作为相对词锚点。 */
+  temporalKind?: "event" | "due" | "recorded";
 }
 
 export interface RecallItem extends RecallCandidate {
@@ -53,7 +55,9 @@ export const GAMMA = 0.35; // 重要度
 export const RECENCY_HALF_LIFE_DAYS = 14;
 
 /** 中文停用字（单字层面），避免 2-gram 里全是"的了是" */
-const STOP_CHARS = new Set("的了是我你他她它在有和与就不都很也还没这那什么怎么因为所以但是一下子们吗呢吧啊哦嗯".split(""));
+const STOP_CHARS = new Set(
+  "的了是我你他她它在有和与就不都很也还没这那什么怎么因为所以但是一下子们吗呢吧啊哦嗯".split("")
+);
 
 /** 极简分词：ASCII 词（≥2 字符）+ 中文 2-gram（跳过停用字） */
 export function tokenize(text: string): Set<string> {
@@ -82,10 +86,19 @@ export function recencyOf(at: number | undefined, now: number): number {
   return Math.exp(-days / RECENCY_HALF_LIFE_DAYS);
 }
 
-export function scoreCandidate(candidate: RecallCandidate, query: Set<string>, now: number): RecallItem {
+export function scoreCandidate(
+  candidate: RecallCandidate,
+  query: Set<string>,
+  now: number
+): RecallItem {
   const rel = relevance(query, tokenize(candidate.text));
   const rec = recencyOf(candidate.at, now);
-  return { ...candidate, relevance: rel, recency: rec, score: rel * ALPHA + rec * BETA + candidate.importance * GAMMA };
+  return {
+    ...candidate,
+    relevance: rel,
+    recency: rec,
+    score: rel * ALPHA + rec * BETA + candidate.importance * GAMMA,
+  };
 }
 
 /**
@@ -99,7 +112,7 @@ export function splitEntries(text: string, minLen = 6): string[] {
       s
         .trim()
         .replace(/^[-·•]\s*/, "")
-        .replace(/^\d+[.、)]\s+/, ""),
+        .replace(/^\d+[.、)]\s+/, "")
     )
     .filter((s) => s.length >= minLen && !/^暂无/.test(s));
 }
@@ -118,9 +131,27 @@ export function parseLeadingDate(text: string, now: number): number | undefined 
   return undefined;
 }
 
+/** 解析本地绝对日期，避免 YYYY-MM-DD 被 JS 当 UTC 后在东八区显示成 08:00。 */
+export function parseAbsoluteDate(text: string | undefined): number | undefined {
+  const raw = String(text || "").trim();
+  if (!raw) return undefined;
+  const local = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?$/.exec(raw);
+  if (local) {
+    return new Date(
+      Number(local[1]),
+      Number(local[2]) - 1,
+      Number(local[3]),
+      Number(local[4] || 0),
+      Number(local[5] || 0)
+    ).getTime();
+  }
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 export interface RecallInput {
   query: string;
-  notes?: { content?: string; created_at?: string }[];
+  notes?: { content?: string; created_at?: string; event_at?: string; time_uncertain?: boolean }[];
   /** 记忆库四段。兼容蛇形（Rust `GameMemoryBank` 序列化）与驼峰两种拼写 */
   bank?: {
     user_info?: string;
@@ -131,7 +162,13 @@ export interface RecallInput {
     longTerm?: string;
     shortTerm?: string;
   };
-  todos?: { text?: string; completed?: boolean }[];
+  todos?: {
+    text?: string;
+    completed?: boolean;
+    deadline?: string;
+    remindAt?: string;
+    createdAt?: string;
+  }[];
   logs?: ChatLogEntry[];
   now?: number;
   k?: number;
@@ -153,37 +190,79 @@ export function buildCandidates(input: RecallInput, now: number): RecallCandidat
   const out: RecallCandidate[] = [];
   const bank = bankSections(input.bank);
   for (const line of splitEntries(bank.promises)) {
-    out.push({ text: line, source: "约定", importance: SOURCE_IMPORTANCE.约定, at: parseLeadingDate(line, now) });
+    out.push({
+      text: line,
+      source: "约定",
+      importance: SOURCE_IMPORTANCE.约定,
+      at: parseLeadingDate(line, now),
+    });
   }
   for (const line of splitEntries(bank.userInfo)) {
-    out.push({ text: line, source: "用户信息", importance: SOURCE_IMPORTANCE.用户信息, at: parseLeadingDate(line, now) });
+    out.push({
+      text: line,
+      source: "用户信息",
+      importance: SOURCE_IMPORTANCE.用户信息,
+      at: parseLeadingDate(line, now),
+    });
   }
   for (const line of splitEntries(bank.longTerm)) {
-    out.push({ text: line, source: "长期经历", importance: SOURCE_IMPORTANCE.长期经历, at: parseLeadingDate(line, now) });
+    out.push({
+      text: line,
+      source: "长期经历",
+      importance: SOURCE_IMPORTANCE.长期经历,
+      at: parseLeadingDate(line, now),
+    });
   }
   for (const note of input.notes || []) {
     const text = String(note?.content || "").trim();
     if (text.length < 6) continue;
-    const at = note?.created_at ? Date.parse(note.created_at) : undefined;
-    out.push({ text, source: "笔记", importance: SOURCE_IMPORTANCE.笔记, at: Number.isFinite(at as number) ? (at as number) : undefined });
+    const eventAt = parseAbsoluteDate(note?.event_at);
+    const recordedAt = parseAbsoluteDate(note?.created_at);
+    const hasEventAt = eventAt !== undefined;
+    const at = hasEventAt ? eventAt : recordedAt;
+    out.push({
+      text,
+      source: "笔记",
+      importance: SOURCE_IMPORTANCE.笔记,
+      at,
+      temporalKind: hasEventAt ? "event" : "recorded",
+    });
   }
   for (const todo of input.todos || []) {
     const text = String(todo?.text || "").trim();
     if (text.length < 4 || todo?.completed) continue;
-    out.push({ text, source: "待办", importance: SOURCE_IMPORTANCE.待办 });
+    const due = String(todo?.deadline || todo?.remindAt || "").trim();
+    const dueAt = parseAbsoluteDate(due);
+    const createdAt = parseAbsoluteDate(todo?.createdAt);
+    out.push({
+      text,
+      source: "待办",
+      importance: SOURCE_IMPORTANCE.待办,
+      at: dueAt ?? createdAt,
+      temporalKind: dueAt !== undefined ? "due" : "recorded",
+    });
   }
   // 聊天记录：只取用户说过的话作为"回忆素材"，她自己的话不作为记忆条目
   for (const entry of input.logs || []) {
     if (!entry || entry.role !== "user") continue;
     const text = String(entry.text || "").trim();
     if (text.length < 8) continue;
-    out.push({ text, source: "聊天记录", importance: SOURCE_IMPORTANCE.聊天记录, at: Number(entry.t) || undefined });
+    out.push({
+      text,
+      source: "聊天记录",
+      importance: SOURCE_IMPORTANCE.聊天记录,
+      at: Number(entry.t) || undefined,
+      temporalKind: "recorded",
+    });
   }
   return out;
 }
 
 /** 去重（同文本保留分更高的）+ 打分排序 + 取 Top-K */
-export function recall(input: RecallInput): { items: RecallItem[]; stats: { pool: number; hit: number } } {
+export function recall(input: RecallInput): {
+  items: RecallItem[];
+  stats: { pool: number; hit: number };
+} {
   const now = input.now ?? Date.now();
   const k = input.k ?? 5;
   const query = tokenize(input.query);
@@ -201,10 +280,28 @@ export function recall(input: RecallInput): { items: RecallItem[]; stats: { pool
 }
 
 /** 渲染成注入块；没有命中时给一句"别硬提以前的事"，避免模型编记忆 */
-export function renderRecallBlock(items: RecallItem[]): string {
-  if (!items.length) return "【相关记忆】这次没有检索到和他当前话题相关的过去记录，不要硬提以前的事，也不要编。";
-  const lines = items.map((item) => `· ${item.text}（${item.source}）`);
-  return ["【相关记忆】（和他现在说的这件事有关，可以用，但要自然地带出来，别像在念清单）", ...lines].join("\n");
+function temporalLabel(item: RecallItem, now = Date.now()): string {
+  if (!item.at || !Number.isFinite(item.at)) return "时间不确定；不能当作当前或未来安排";
+  const at = new Date(item.at);
+  const absolute = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")} ${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+  if (item.temporalKind === "recorded") {
+    return `记录于 ${absolute}；原文中的“今天/明天”等只相对该记录时间，不代表现在`;
+  }
+  if (item.at < now)
+    return `${item.temporalKind === "due" ? "截止" : "事件"}时间 ${absolute}，现已过去`;
+  return `${item.temporalKind === "due" ? "截止" : "事件"}时间 ${absolute}，尚未到达`;
+}
+
+export function renderRecallBlock(items: RecallItem[], now = Date.now()): string {
+  if (!items.length)
+    return "【相关记忆】这次没有检索到和他当前话题相关的过去记录，不要硬提以前的事，也不要编。";
+  const lines = items.map(
+    (item) => `· ${item.text}（${item.source}；${temporalLabel(item, now)}）`
+  );
+  return [
+    "【相关记忆】（当前时间由系统另行提供。必须按每条的绝对时间判断过去/未来；过去计划只能当历史，不能说成即将发生。）",
+    ...lines,
+  ].join("\n");
 }
 
 /**
@@ -212,15 +309,32 @@ export function renderRecallBlock(items: RecallItem[]): string {
  * `replaceBank: true` 表示"本轮不要全量注入记忆库三段，用检索结果代替"。
  * 任何异常都只打日志：检索失败最多是记忆差一点，不该影响聊天。
  */
-export async function prepareRecall(query: string, opts: { k?: number; replaceBank?: boolean } = {}): Promise<{ items: number; pool: number } | null> {
+export async function prepareRecall(
+  query: string,
+  opts: { k?: number; replaceBank?: boolean } = {}
+): Promise<{ items: number; pool: number } | null> {
   try {
     const [notes, bank, schedules] = await Promise.all([
-      invoke<{ content?: string; created_at?: string }[]>("ds_get_notes").catch(() => []),
+      invoke<
+        { content?: string; created_at?: string; event_at?: string; time_uncertain?: boolean }[]
+      >("ds_get_notes").catch(() => []),
       invoke<RecallInput["bank"]>("ds_get_memory_bank").catch(() => undefined),
       getSchedules().catch(() => undefined),
     ]);
-    const todos = Object.values((schedules?.todoGroups || {}) as Record<string, { todos?: { text?: string; completed?: boolean }[] }>)
-      .flatMap((group) => group?.todos || []);
+    const todos = Object.values(
+      (schedules?.todoGroups || {}) as Record<
+        string,
+        {
+          todos?: {
+            text?: string;
+            completed?: boolean;
+            deadline?: string;
+            remindAt?: string;
+            createdAt?: string;
+          }[];
+        }
+      >
+    ).flatMap((group) => group?.todos || []);
     const logs = exportChatLog().slice(-200);
     const { items, stats } = recall({ query, notes, bank, todos, logs, k: opts.k ?? 5 });
     await invoke("ds_set_memory_recall", {

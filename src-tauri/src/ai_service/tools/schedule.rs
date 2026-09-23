@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 
 use async_trait::async_trait;
-use chrono::{Duration, Local, NaiveDateTime, NaiveTime};
+use chrono::{Duration, Local, NaiveDate, NaiveDateTime, NaiveTime};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -157,6 +157,30 @@ fn resolve_remind_at(raw: &str) -> Result<Option<String>, String> {
     ))
 }
 
+/// 截止时间也必须落成绝对日期，禁止把“明天/下周”原样写进存档。
+/// 只给 HH:MM 时沿用提醒时间的规则；日期可只给 YYYY-MM-DD。
+fn resolve_deadline(raw: &str) -> Result<Option<String>, String> {
+    let normalized = raw.trim().replace('：', ":").replace('T', " ");
+    let normalized = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    if let Ok(date) = NaiveDate::parse_from_str(&normalized, "%Y-%m-%d") {
+        return Ok(Some(date.format("%Y-%m-%d").to_string()));
+    }
+    resolve_remind_at(&normalized).map_err(|_| {
+        format!(
+            "无法解析截止时间 {:?}：相对日期必须先用 get_current_time 换算为绝对的 YYYY-MM-DD 或 YYYY-MM-DD HH:MM",
+            raw.trim()
+        )
+    })
+}
+
+fn now_metadata() -> (String, String) {
+    let now = Local::now();
+    (now.to_rfc3339(), now.offset().to_string())
+}
+
 /// 广播"待办已变更"，让前端重排待办到点提醒的系统通知
 /// （监听方：`src/api/ds-todo-reminder.ts`）。
 fn emit_todos_changed(app: &AppHandle) {
@@ -211,7 +235,7 @@ impl Tool for AddTodo {
                     "text": {"type": "string", "description": "待办内容"},
                     "group": {"type": "string", "description": "分组名，默认 default"},
                     "priority": {"type": "integer", "description": "优先级，默认 0"},
-                    "deadline": {"type": "string", "description": "截止时间，可选"},
+                    "deadline": {"type": "string", "description": "绝对截止时间，可选。只接受 YYYY-MM-DD、YYYY-MM-DD HH:MM 或 HH:MM；若用户说‘明天/下周’，先调用 get_current_time 换算，禁止把相对词原样写入"},
                     "remind_at": {
                         "type": "string",
                         "description": "提醒时间，可选。按用户描述推测一个大致时间：\
@@ -252,7 +276,10 @@ impl Tool for AddTodo {
         let deadline = obj
             .get("deadline")
             .and_then(Value::as_str)
-            .map(str::to_string);
+            .map(resolve_deadline)
+            .transpose()
+            .map_err(ToolError::InvalidArguments)?
+            .flatten();
         // DS娘 v0.4：提醒时间（到点发系统通知）。模型可以只给 "20:00"，日期由设备补。
         let remind_at = obj
             .get("remind_at")
@@ -272,6 +299,7 @@ impl Tool for AddTodo {
                 description: None,
                 todos: Vec::new(),
             });
+        let (now, timezone) = now_metadata();
         group.todos.push(TodoItem {
             id: new_id,
             text,
@@ -279,6 +307,10 @@ impl Tool for AddTodo {
             completed: false,
             deadline,
             remind_at: remind_at.clone(),
+            created_at: Some(now.clone()),
+            updated_at: Some(now),
+            completed_at: None,
+            timezone: Some(timezone),
         });
 
         save_schedule_settings(&settings).map_err(ToolError::Execution)?;
@@ -306,7 +338,7 @@ impl Tool for UpdateTodo {
                     "done": {"type": "boolean", "description": "是否已完成，可选"},
                     "text": {"type": "string", "description": "新的待办内容，可选"},
                     "priority": {"type": "integer", "description": "新的优先级，可选"},
-                    "deadline": {"type": "string", "description": "新的截止时间，例如 2026-09-20 或 20:30；传空字符串表示清除截止时间"},
+                    "deadline": {"type": "string", "description": "新的绝对截止时间，例如 2026-09-20 或 2026-09-20 20:30；相对日期须先用 get_current_time 换算；传空字符串表示清除"},
                     "remind_at": {
                         "type": "string",
                         "description": "新的提醒时间；传空字符串表示清除提醒。写法同 schedule_add_todo：\
@@ -334,7 +366,12 @@ impl Tool for UpdateTodo {
         let priority = optional_i32(obj, "priority", "schedule_update_todo")?;
         // DS娘 v0.4 补的"改期"能力：LingChat 原版没有 deadline 写入方（schema 里也没有），
         // 只能靠改写 text 来"改期"。这里补上，空字符串表示清除。
-        let deadline = obj.get("deadline").and_then(Value::as_str).map(str::to_string);
+        let deadline = obj
+            .get("deadline")
+            .and_then(Value::as_str)
+            .map(resolve_deadline)
+            .transpose()
+            .map_err(ToolError::InvalidArguments)?;
         // 提醒时间：None = 没提供（不改），Some(None) = 传了空字符串（清除）
         let remind_at = obj
             .get("remind_at")
@@ -368,8 +405,10 @@ impl Tool for UpdateTodo {
             .and_then(|groups| groups.get_mut(&group_name))
             .and_then(|group| group.todos.iter_mut().find(|todo| todo.id == id))
             .ok_or_else(|| ToolError::Execution(format!("待办 {id} 不存在")))?;
+        let (now, timezone) = now_metadata();
         if let Some(d) = done {
             todo.completed = d;
+            todo.completed_at = if d { Some(now.clone()) } else { None };
         }
         if let Some(t) = text {
             todo.text = t;
@@ -378,12 +417,16 @@ impl Tool for UpdateTodo {
             todo.priority = p;
         }
         if let Some(dl) = deadline {
-            let trimmed = dl.trim();
-            todo.deadline = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+            todo.deadline = dl;
         }
         if let Some(ra) = remind_at {
             todo.remind_at = ra;
         }
+        if todo.created_at.is_none() {
+            todo.created_at = Some(now.clone());
+        }
+        todo.updated_at = Some(now);
+        todo.timezone = Some(timezone);
         let applied_remind_at = todo.remind_at.clone();
 
         save_schedule_settings(&settings).map_err(ToolError::Execution)?;
@@ -452,4 +495,24 @@ fn require_object<'a>(
     arguments
         .as_object()
         .ok_or_else(|| ToolError::InvalidArguments(format!("{tool} 参数必须是 JSON object")))
+}
+
+#[cfg(test)]
+mod temporal_tests {
+    use super::*;
+
+    #[test]
+    fn deadline_accepts_absolute_date_and_datetime() {
+        assert_eq!(resolve_deadline("2026-09-24").unwrap(), Some("2026-09-24".into()));
+        assert_eq!(
+            resolve_deadline("2026-09-24T20:30:15").unwrap(),
+            Some("2026-09-24 20:30".into())
+        );
+    }
+
+    #[test]
+    fn deadline_rejects_unanchored_relative_date() {
+        assert!(resolve_deadline("明天晚上").is_err());
+        assert_eq!(resolve_deadline("  ").unwrap(), None);
+    }
 }

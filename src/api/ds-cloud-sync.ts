@@ -31,6 +31,10 @@ interface LocalNote {
   content: string;
   tags?: string[];
   created_at?: string;
+  updated_at?: string;
+  event_at?: string;
+  timezone?: string;
+  time_uncertain?: boolean;
 }
 
 /** 本地待办（TodoPage 的形状：id 为 Date.now() 毫秒数，见 TodoPage.vue:411-417） */
@@ -43,6 +47,10 @@ interface LocalTodo {
   deadline?: string;
   /** 提醒时间（本地 "YYYY-MM-DD HH:MM"），到点发系统通知；随待办一起备份到云端 */
   remindAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+  timezone?: string;
 }
 
 interface LocalTodoGroup {
@@ -60,6 +68,11 @@ interface CloudNote {
   tag?: string;
   time?: string;
   hits?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  eventAt?: string;
+  timezone?: string;
+  timeUncertain?: boolean;
 }
 
 interface CloudSchedule {
@@ -76,6 +89,16 @@ interface CloudSchedule {
    * 会原样保存并在合并时保留它；推送时总是带上（空字符串表示清除提醒）。
    */
   remindAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+  timezone?: string;
+  dueAt?: string;
+}
+
+interface CloudTombstone {
+  id: string;
+  deletedAt: string;
 }
 
 interface CloudMemory {
@@ -83,6 +106,10 @@ interface CloudMemory {
     notes?: CloudNote[];
     profile?: Record<string, unknown>;
     schedule?: CloudSchedule[];
+    tombstones?: {
+      notes?: CloudTombstone[];
+      schedule?: CloudTombstone[];
+    };
   };
   summary?: string;
   diary?: Record<string, unknown>;
@@ -176,16 +203,17 @@ async function loadCloudSettings(): Promise<CloudSettings> {
           await saveEnvConfig({ "ds.cloud_token": envToken });
           invalidateCloudSettings();
         } catch (e) {
-          console.warn("[DS娘·云同步] 回写 VITE_WHALE_TOKEN 到设置失败（本次仍用环境变量同步）:", e);
+          console.warn(
+            "[DS娘·云同步] 回写 VITE_WHALE_TOKEN 到设置失败（本次仍用环境变量同步）:",
+            e
+          );
         }
       }
     }
 
     if (!token) {
       enabled = false;
-      console.warn(
-        "[DS娘·云同步] 未配置 ds.cloud_token 且未注入 VITE_WHALE_TOKEN，跳过云同步"
-      );
+      console.warn("[DS娘·云同步] 未配置 ds.cloud_token 且未注入 VITE_WHALE_TOKEN，跳过云同步");
     }
     if (!url) {
       enabled = false;
@@ -265,6 +293,83 @@ function mergeById<T>(localItems: T[], cloudItems: T[], idOf: (item: T) => strin
   return out;
 }
 
+function timestampOf(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/** 同 ID 选择 updatedAt/createdAt/time 更新更晚的一份；相同时本地优先。 */
+function mergeLatestById<T>(
+  localItems: T[],
+  cloudItems: T[],
+  idOf: (item: T) => string,
+  revisionOf: (item: T) => unknown
+): T[] {
+  const out = new Map<string, T>();
+  for (const item of cloudItems) out.set(idOf(item), item);
+  for (const item of localItems) {
+    const key = idOf(item);
+    const remote = out.get(key);
+    if (!remote || timestampOf(revisionOf(item)) >= timestampOf(revisionOf(remote)))
+      out.set(key, item);
+  }
+  return [...out.values()];
+}
+
+function mergeTombstones(a: CloudTombstone[] = [], b: CloudTombstone[] = []): CloudTombstone[] {
+  return mergeLatestById(
+    a,
+    b,
+    (x) => String(x.id),
+    (x) => x.deletedAt
+  );
+}
+
+const SNAPSHOT_NOTES_KEY = "ds_cloud_snapshot_notes_v2";
+const SNAPSHOT_TODOS_KEY = "ds_cloud_snapshot_todos_v2";
+const TOMBSTONES_KEY = "ds_cloud_tombstones_v2";
+
+function readJson<T>(key: string, fallback: T): T {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || "null");
+    return value ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function collectDeletedIds(kind: "notes" | "schedule", currentIds: string[]): CloudTombstone[] {
+  const snapshotKey = kind === "notes" ? SNAPSHOT_NOTES_KEY : SNAPSHOT_TODOS_KEY;
+  const previous = readJson<string[]>(snapshotKey, []);
+  const current = new Set(currentIds);
+  const stored = readJson<{ notes?: CloudTombstone[]; schedule?: CloudTombstone[] }>(
+    TOMBSTONES_KEY,
+    {}
+  );
+  const now = new Date().toISOString();
+  const detected = previous.filter((id) => !current.has(id)).map((id) => ({ id, deletedAt: now }));
+  const merged = mergeTombstones(stored[kind] || [], detected);
+  stored[kind] = merged;
+  localStorage.setItem(TOMBSTONES_KEY, JSON.stringify(stored));
+  return merged;
+}
+
+function saveSnapshots(noteIds: string[] | null, todoIds: string[] | null): void {
+  if (noteIds) localStorage.setItem(SNAPSHOT_NOTES_KEY, JSON.stringify(noteIds));
+  if (todoIds) localStorage.setItem(SNAPSHOT_TODOS_KEY, JSON.stringify(todoIds));
+}
+
+function applyTombstones<T>(
+  items: T[],
+  tombstones: CloudTombstone[],
+  idOf: (item: T) => string,
+  revisionOf: (item: T) => unknown
+): T[] {
+  const deleted = new Map(tombstones.map((x) => [String(x.id), timestampOf(x.deletedAt)]));
+  return items.filter((item) => (deleted.get(idOf(item)) || 0) < timestampOf(revisionOf(item)));
+}
+
 function toNumber(value: unknown, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -332,8 +437,7 @@ function buildLegacySections(
 
   const facts = Array.isArray(memory?.facts) ? (memory?.facts as unknown[]) : [];
   for (const fact of facts) {
-    const text =
-      typeof fact === "string" ? fact : String((fact as { text?: unknown })?.text ?? "");
+    const text = typeof fact === "string" ? fact : String((fact as { text?: unknown })?.text ?? "");
     const trimmed = text.trim();
     if (trimmed) longTermLines.push(`- ${trimmed}`);
   }
@@ -353,7 +457,16 @@ function buildLegacySections(
   const notes = Array.isArray(bank.notes) ? bank.notes : [];
   for (const note of notes) {
     const content = String(note?.content ?? "").trim();
-    if (content) longTermLines.push(`- ${content}`);
+    if (content) {
+      const eventAt = String(note?.eventAt || "").trim();
+      const recordedAt = String(note?.createdAt || note?.time || "").trim();
+      const anchor = eventAt
+        ? `事件时间 ${eventAt}`
+        : recordedAt
+          ? `记录于 ${recordedAt}；事件时间未确认`
+          : "时间不确定的历史记录";
+      longTermLines.push(`- [${anchor}] ${content}`);
+    }
   }
 
   const userInfo = splitLines(userInfoLines.join("\n")).join("\n");
@@ -374,17 +487,26 @@ function buildLegacySections(
  */
 async function importLegacyMemory(memory: CloudMemory | null | undefined): Promise<void> {
   try {
-    const notesCount = memory?.bank?.notes?.length ?? 0;
-    const factsCount = memory?.facts?.length ?? 0;
-    const fingerprint = `${notesCount}-${factsCount}`;
+    const fingerprintSource = JSON.stringify({
+      notes: memory?.bank?.notes || [],
+      facts: memory?.facts || [],
+      people: memory?.people || {},
+      user: memory?.user || {},
+    });
+    let hash = 2166136261;
+    for (let i = 0; i < fingerprintSource.length; i++) {
+      hash ^= fingerprintSource.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    const fingerprint = `v2-${(hash >>> 0).toString(16)}`;
     if (localStorage.getItem(LEGACY_IMPORT_KEY) === fingerprint) return;
 
     const sections = buildLegacySections(memory);
     if (!sections) return;
 
-    const res = (await invoke("ds_import_memory_sections", { sections })) as
-      | { persisted?: boolean }
-      | null;
+    const res = (await invoke("ds_import_memory_sections", { sections })) as {
+      persisted?: boolean;
+    } | null;
     // 只有真正落盘才记指纹：若此刻还没有存档槽（persisted=false），内容只在内存里、
     // 重启会丢；不记指纹，等下次同步（有存档后）再导一次。
     if (res && res.persisted === false) {
@@ -402,11 +524,19 @@ async function importLegacyMemory(memory: CloudMemory | null | undefined): Promi
 
 /** 本地笔记 → bank.notes（tags[0] → tag，created_at → time） */
 function toCloudNotes(local: LocalNote[]): CloudNote[] {
+  const now = new Date().toISOString();
   return local.map((n) => ({
     id: String(n.id),
     content: String(n.content ?? ""),
     ...(Array.isArray(n.tags) && n.tags.length > 0 ? { tag: String(n.tags[0]) } : {}),
     ...(n.created_at ? { time: String(n.created_at) } : {}),
+    createdAt: String(n.created_at || now),
+    // 旧版没有 updated_at：升级后的第一次同步把当前本地副本视作一次迁移更新，
+    // 避免云端历史条目仅因补字段时生成了较新时间而覆盖用户设备现状。
+    updatedAt: String(n.updated_at || now),
+    ...(n.event_at ? { eventAt: String(n.event_at) } : {}),
+    ...(n.timezone ? { timezone: String(n.timezone) } : {}),
+    timeUncertain: n.time_uncertain ?? !n.event_at,
   }));
 }
 
@@ -417,6 +547,10 @@ function toLocalNotes(cloud: CloudNote[]): LocalNote[] {
     content: String(n.content ?? ""),
     tags: n.tag ? [String(n.tag)] : [],
     created_at: n.time ? String(n.time) : new Date().toISOString(),
+    updated_at: String(n.updatedAt || n.createdAt || n.time || new Date().toISOString()),
+    ...(n.eventAt ? { event_at: String(n.eventAt) } : {}),
+    ...(n.timezone ? { timezone: String(n.timezone) } : {}),
+    time_uncertain: n.timeUncertain ?? !n.eventAt,
   }));
 }
 
@@ -424,16 +558,27 @@ function toLocalNotes(cloud: CloudNote[]): LocalNote[] {
  * 合并笔记：本地优先，云端独有的补进来。
  * 返回合并结果（待整体写回本地并发送给云端，让两端收敛到同一个并集）。
  */
-async function mergeNotes(cloudNotes: CloudNote[]): Promise<LocalNote[]> {
+async function mergeNotes(
+  cloudNotes: CloudNote[],
+  tombstones: CloudTombstone[] = []
+): Promise<LocalNote[]> {
   let local: LocalNote[] = [];
   const raw = await invoke<unknown>("ds_get_notes");
   if (Array.isArray(raw)) local = raw as LocalNote[];
-  const merged = mergeById<CloudNote>(
+  const merged = mergeLatestById<CloudNote>(
     toCloudNotes(local),
     Array.isArray(cloudNotes) ? cloudNotes : [],
-    (n) => String(n.id)
+    (n) => String(n.id),
+    (n) => n.updatedAt || n.createdAt || n.time
   );
-  return toLocalNotes(merged);
+  return toLocalNotes(
+    applyTombstones(
+      merged,
+      tombstones,
+      (n) => String(n.id),
+      (n) => n.updatedAt || n.createdAt || n.time
+    )
+  );
 }
 
 /** 把合并后的笔记写回本地（结构转回 {id, content, tags, created_at}）。 */
@@ -446,20 +591,29 @@ async function writeLocalNotes(notes: LocalNote[]): Promise<void> {
 /** 展平本地 todoGroups → bank.schedule（分组名写进 group，便于 pull 时还原） */
 function flattenTodos(todoGroups: Record<string, LocalTodoGroup>): CloudSchedule[] {
   const out: CloudSchedule[] = [];
+  const now = new Date().toISOString();
   for (const [groupId, group] of Object.entries(todoGroups || {})) {
     const todos = Array.isArray(group?.todos) ? group.todos : [];
     for (const todo of todos) {
       const id = String(todo.id);
+      const inferredCreated =
+        Number(todo.id) > 1_000_000_000_000 ? new Date(Number(todo.id)).toISOString() : now;
       out.push({
         id,
         content: String(todo.text ?? ""),
         status: todo.completed ? "done" : "todo",
         importance: Math.round(toNumber(todo.priority, 0)),
         ...(todo.deadline ? { date: String(todo.deadline) } : {}),
+        ...(todo.deadline ? { dueAt: String(todo.deadline) } : {}),
         // 提醒时间总是带上（空字符串=没有提醒）：Worker 靠"字段是否存在"区分
         // "用户清掉了提醒"和"老客户端根本没这个字段"
         remindAt: String(todo.remindAt ?? ""),
         group: groupId,
+        createdAt: String(todo.createdAt || inferredCreated),
+        // 与笔记相同：旧数据首次进入 v2 协议时以当前本地副本作为迁移基线。
+        updatedAt: String(todo.updatedAt || now),
+        ...(todo.completedAt ? { completedAt: String(todo.completedAt) } : {}),
+        ...(todo.timezone ? { timezone: String(todo.timezone) } : {}),
       });
     }
   }
@@ -504,10 +658,17 @@ function groupSchedules(
       text: String(item?.content ?? ""),
       priority: Math.round(toNumber(item?.importance, 0)),
       completed: item?.status === "done",
+      createdAt: String(item?.createdAt || item?.time || new Date().toISOString()),
+      updatedAt: String(
+        item?.updatedAt || item?.createdAt || item?.time || new Date().toISOString()
+      ),
     };
-    if (item?.date) todo.deadline = String(item.date);
+    if (item?.dueAt || item?.date) todo.deadline = String(item.dueAt || item.date);
     // 云端没有这个字段时保留本地值（mergeById 是本地优先，本地条目本来就带着 remindAt）
     if (item?.remindAt) todo.remindAt = String(item.remindAt);
+    if (item?.completedAt || item?.doneAt)
+      todo.completedAt = String(item.completedAt || item.doneAt);
+    if (item?.timezone) todo.timezone = String(item.timezone);
     groups[groupId].todos.push(todo);
   }
   return groups;
@@ -559,18 +720,29 @@ function dedupeLocalTodosOnce(base: Record<string, LocalTodoGroup>): {
  * 合并待办：本地优先，云端独有（按 id 判断）的补进来；
  * 顺带记录云端带来的新条目数（pulled）。
  */
-function mergeTodos(cloudSchedule: CloudSchedule[]) {
+function mergeTodos(cloudSchedule: CloudSchedule[], tombstones: CloudTombstone[] = []) {
   const cloudList = Array.isArray(cloudSchedule) ? cloudSchedule : [];
   return getSchedules().then((local) => {
     const { groups: base, removed } = dedupeLocalTodosOnce(
       (local?.todoGroups || {}) as Record<string, LocalTodoGroup>
     );
     const localFlat = flattenTodos(base);
-    const merged = mergeById<CloudSchedule>(localFlat, cloudList, (item) => String(item.id));
-    const added = merged.length - localFlat.length;
+    const merged = mergeLatestById<CloudSchedule>(
+      localFlat,
+      cloudList,
+      (item) => String(item.id),
+      (item) => item.updatedAt || item.createdAt || item.time
+    );
+    const live = applyTombstones(
+      merged,
+      tombstones,
+      (item) => String(item.id),
+      (item) => item.updatedAt || item.createdAt || item.time
+    );
+    const added = live.length - localFlat.length;
     return {
-      groups: groupSchedules(merged, base),
-      total: merged.length,
+      groups: groupSchedules(live, base),
+      total: live.length,
       /** 云端独有、被补进本地的条数 */
       added: added > 0 ? added : 0,
       /** 顺手清掉的历史重复条数（只会有一次） */
@@ -610,7 +782,9 @@ function normalizeCloudLogs(cloudLogs: unknown): ChatLogEntry[] {
 function mergeLogs(cloudLogs: unknown): ChatLogEntry[] {
   const local = exportChatLog();
   const cloud = normalizeCloudLogs(cloudLogs);
-  return mergeById<ChatLogEntry>(local, cloud, (entry) => String(entry.t)).sort((a, b) => a.t - b.t);
+  return mergeById<ChatLogEntry>(local, cloud, (entry) => String(entry.t)).sort(
+    (a, b) => a.t - b.t
+  );
 }
 
 // ─── 主流程 ───
@@ -647,17 +821,21 @@ export async function syncCloudNow(): Promise<{
 
     // 1) 采集本地数据（三段互相独立：某一段拿不到不影响其它段）
     let localNotes: LocalNote[] = [];
+    let notesAvailable = false;
     try {
       localNotes = await mergeNotes([]);
+      notesAvailable = true;
     } catch (e) {
       // 例如刚启动还没选角色：跳过笔记这一段，待办/日志照常同步。
       console.warn("[DS娘·云同步] 读取本地笔记失败，跳过记忆同步:", e);
     }
 
     let localTodoGroups: Record<string, LocalTodoGroup> = {};
+    let todosAvailable = false;
     try {
       const localTodos = await mergeTodos([]);
       localTodoGroups = localTodos.groups;
+      todosAvailable = true;
     } catch (e) {
       console.warn("[DS娘·云同步] 读取本地待办失败，跳过待办同步:", e);
     }
@@ -669,12 +847,30 @@ export async function syncCloudNow(): Promise<{
       console.warn("[DS娘·云同步] 读取本地日志失败，跳过日志同步:", e);
     }
 
+    const localNoteIds = localNotes.map((x) => String(x.id));
+    const localTodoIds = flattenTodos(localTodoGroups).map((x) => String(x.id));
+    const storedTombstones = readJson<{
+      notes?: CloudTombstone[];
+      schedule?: CloudTombstone[];
+    }>(TOMBSTONES_KEY, {});
+    // 读取失败不能等同于“用户删空”：否则刚启动尚未选角色时会把全部云端笔记做成墓碑。
+    const localNoteTombstones = notesAvailable
+      ? collectDeletedIds("notes", localNoteIds)
+      : storedTombstones.notes || [];
+    const localTodoTombstones = todosAvailable
+      ? collectDeletedIds("schedule", localTodoIds)
+      : storedTombstones.schedule || [];
+
     // 2) 组装并推送（PUT {url}/api/memory）
     const memory: CloudMemory = {
       bank: {
         notes: toCloudNotes(localNotes),
         profile: {},
         schedule: flattenTodos(localTodoGroups),
+        tombstones: {
+          notes: localNoteTombstones,
+          schedule: localTodoTombstones,
+        },
       },
       summary: "",
       diary: {},
@@ -704,23 +900,37 @@ export async function syncCloudNow(): Promise<{
     if (!data || typeof data !== "object" || data.ok !== true) {
       throw new Error("云端返回异常（ok !== true）");
     }
-    const remote: CloudMemory =
-      data.memory && typeof data.memory === "object" ? data.memory : {};
+    const remote: CloudMemory = data.memory && typeof data.memory === "object" ? data.memory : {};
+    const noteTombstones = mergeTombstones(
+      localNoteTombstones,
+      remote.bank?.tombstones?.notes || []
+    );
+    const todoTombstones = mergeTombstones(
+      localTodoTombstones,
+      remote.bank?.tombstones?.schedule || []
+    );
+    localStorage.setItem(
+      TOMBSTONES_KEY,
+      JSON.stringify({ notes: noteTombstones, schedule: todoTombstones })
+    );
 
     // 3) Pull：把云端权威结果合并回本地（本地优先，云端独有的补进来）
     let mergedNotes = localNotes;
     try {
-      mergedNotes = await mergeNotes(remote.bank?.notes || []);
+      mergedNotes = await mergeNotes(remote.bank?.notes || [], noteTombstones);
       if (mergedNotes.length > localNotes.length) pulled += mergedNotes.length - localNotes.length;
       await writeLocalNotes(mergedNotes);
+      notesAvailable = true;
     } catch (e) {
       console.warn("[DS娘·云同步] 合并/写回本地笔记失败（不影响聊天）:", e);
     }
 
     try {
-      const mergedTodos = await mergeTodos(remote.bank?.schedule || []);
+      const mergedTodos = await mergeTodos(remote.bank?.schedule || [], todoTombstones);
       pulled += mergedTodos.added;
       await saveSchedules({ todoGroups: mergedTodos.groups });
+      localTodoGroups = mergedTodos.groups;
+      todosAvailable = true;
     } catch (e) {
       console.warn("[DS娘·云同步] 合并/写回本地待办失败（不影响聊天）:", e);
     }
@@ -737,6 +947,11 @@ export async function syncCloudNow(): Promise<{
     //    让它在**每一轮对话**里自动注入（内部自带 localStorage 指纹与 try/catch，
     //    已导过就跳过、失败只 warn，不影响这里的 ok 判定）。
     await importLegacyMemory(remote);
+
+    saveSnapshots(
+      notesAvailable ? mergedNotes.map((x) => String(x.id)) : null,
+      todosAvailable ? flattenTodos(localTodoGroups).map((x) => String(x.id)) : null
+    );
 
     ok = true;
   } catch (e) {

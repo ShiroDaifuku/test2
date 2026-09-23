@@ -1,15 +1,46 @@
 use crate::ai_service::game_system::game_status::GameStatus;
 use crate::ai_service::proactive_system::config::ProactiveConfig;
 use crate::ai_service::proactive_system::types::{
-    IntentType, PerceptionResult, UserScheduleSettings, UserState,
+    IntentType, PerceptionResult, TodoItem, UserScheduleSettings, UserState,
 };
 use crate::ai_service::screen_analyzer::{ScreenAnalyzer, ScreenAnalyzerConfig};
-use chrono::Local;
+use chrono::{Local, NaiveDate, NaiveDateTime};
 use rand::Rng;
 use tokio::sync::Mutex;
 
 pub struct StrategyDispatcher {
     screen_analyzer: Mutex<ScreenAnalyzer>,
+}
+
+/// 返回主动提醒可使用的绝对时间说明；None 表示该条已过期或时间语义不可靠，不能主动提起。
+fn todo_time_context_at(todo: &TodoItem, now: NaiveDateTime) -> Option<String> {
+    let raw = todo.deadline.as_deref().or(todo.remind_at.as_deref());
+    if let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) {
+        let parsed = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"]
+            .iter()
+            .find_map(|fmt| NaiveDateTime::parse_from_str(raw, fmt).ok())
+            .or_else(|| {
+                NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+                    .ok()
+                    .and_then(|date| date.and_hms_opt(23, 59, 59))
+            });
+        let at = parsed?; // 有时间字段却无法解析：旧脏数据，不主动误读
+        if at <= now {
+            return None;
+        }
+        return Some(format!("绝对时间 {}（尚未到达）", at.format("%Y-%m-%d %H:%M")));
+    }
+
+    // 旧数据可能把“明天/下周”只写在正文里。没有记录锚点就无法知道它究竟是哪一天，
+    // 宁可不主动提醒，也不能在数周后仍把它解释成新的“明天”。
+    const RELATIVE_WORDS: [&str; 12] = [
+        "今天", "今晚", "明天", "明晚", "后天", "下周", "周末", "下个月", "月底",
+        "过几天", "一会儿", "待会",
+    ];
+    if RELATIVE_WORDS.iter().any(|word| todo.text.contains(word)) {
+        return None;
+    }
+    Some("未设置具体时间；只能询问是否仍需处理，不得自行推断今天或明天".to_string())
 }
 
 impl StrategyDispatcher {
@@ -180,11 +211,14 @@ impl StrategyDispatcher {
     ) -> Option<String> {
         let todo_groups = settings.todo_groups.as_ref()?;
         let mut candidates = Vec::new();
+        let now = Local::now();
 
         for group in todo_groups.values() {
             for todo in &group.todos {
                 if !todo.completed && todo.priority >= 1 {
-                    candidates.push(todo);
+                    if let Some(time_context) = todo_time_context_at(todo, now.naive_local()) {
+                        candidates.push((todo, time_context));
+                    }
                 }
             }
         }
@@ -195,12 +229,16 @@ impl StrategyDispatcher {
 
         let mut rng = rand::thread_rng();
         let idx = rng.gen_range(0..candidates.len());
-        let selected = candidates[idx];
+        let (selected, time_context) = &candidates[idx];
         let user_name = &game_status.player.user_name;
 
         Some(format!(
-            "{{你想起来{}有一个未完成的任务：'{} '。提醒一下吧？}}",
-            user_name, selected.text
+            "{{当前绝对时间：{}（时区 {}）。{}有一个未完成任务：'{}'；{}。可以自然询问一次，但必须按绝对时间判断过去/未来，禁止把旧的‘明天’重新解释为现在的明天。}}",
+            now.format("%Y-%m-%d %H:%M:%S"),
+            now.offset(),
+            user_name,
+            selected.text,
+            time_context
         ))
     }
 
@@ -235,5 +273,32 @@ impl StrategyDispatcher {
             .unwrap_or_else(|| "你".to_string());
 
         format!("{{ {} 想继续说话了}}", ai_name)
+    }
+}
+
+#[cfg(test)]
+mod temporal_todo_tests {
+    use super::*;
+
+    fn todo(text: &str, deadline: Option<&str>) -> TodoItem {
+        TodoItem {
+            text: text.to_string(),
+            priority: 1,
+            deadline: deadline.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn proactive_todo_rejects_past_deadline() {
+        let now = NaiveDateTime::parse_from_str("2026-09-23 12:00", "%Y-%m-%d %H:%M").unwrap();
+        assert!(todo_time_context_at(&todo("和朋友吃饭", Some("2026-09-22")), now).is_none());
+    }
+
+    #[test]
+    fn proactive_todo_rejects_unanchored_relative_text() {
+        let now = NaiveDateTime::parse_from_str("2026-09-23 12:00", "%Y-%m-%d %H:%M").unwrap();
+        assert!(todo_time_context_at(&todo("明天和朋友吃饭", None), now).is_none());
+        assert!(todo_time_context_at(&todo("整理书桌", None), now).is_some());
     }
 }

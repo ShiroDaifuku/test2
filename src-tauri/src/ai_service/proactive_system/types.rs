@@ -65,6 +65,16 @@ pub struct TodoItem {
     /// 与 `deadline`（截止时间，只作文本展示/云端字段）是两件事。
     /// 旧存档没有这个字段，serde 会按 None 读入。
     pub remind_at: Option<String>,
+    /// 创建/最后修改/完成的绝对时间。全部使用 RFC3339；旧存档缺失时为 None。
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+    /// 创建该时间语义时的设备时区偏移（例如 +08:00），用于跨设备解释本地时间。
+    #[serde(default)]
+    pub timezone: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

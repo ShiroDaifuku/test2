@@ -26,6 +26,9 @@ fn init_prompts() -> HashMap<String, String> {
         "3. 输出：直接输出更新后的内容本身，不要包含任何解释。\n",
         "4. 逻辑：如果没有新信息需要更新，请原样保留【旧的记忆档案】的内容。\n",
         "5. 内容完整性：如果【旧的记忆档案】中存在被截断或不完整的片段，请直接丢弃，不要保留或引用它们。\n",
+        "6. 时间锚定：新增对话中的‘今天/明天/下周/过几天’必须以【归档绝对时间】为参照，换算为 YYYY-MM-DD；不得把相对日期原样写进新档案。\n",
+        "7. 不确定时间：旧档案中的相对日期若没有可追溯的记录时间，不得猜测；标注为‘时间不确定的历史记录’，且不能当作当前或未来待办。\n",
+        "8. 过去与未来：计划时间早于【归档绝对时间】时，除非新增对话明确说明仍未完成，否则只作为过去经历，不得继续保留为待办或未履行约定。\n",
     );
 
     let mut m = HashMap::new();
@@ -68,7 +71,8 @@ fn init_prompts() -> HashMap<String, String> {
             "{}\n【任务目标】：维护一份【待办与契约清单】。\n\
              【处理逻辑】：\n\
              1. 新增约定：提取对话中明确达成的承诺。\n\
-             2. 状态核销：如果能够在【新增对话】中找到已完成的证据，从清单中【删除】该条目。\n",
+             2. 状态核销：如果能够在【新增对话】中找到已完成的证据，从清单中【删除】该条目。\n\
+             3. 绝对日期：每条有时间的约定都必须写明 YYYY-MM-DD；到期且没有仍待处理证据的条目从清单移到长期经历或删除。\n",
             base_role
         ),
     );
@@ -309,12 +313,17 @@ impl PersistentMemorySystem {
     pub async fn get_system_memory_text(&self) -> String {
         let bank = self.memory_bank.lock().await;
         let limits = self.section_limits;
+        let now = chrono::Local::now();
         format!(
             "\n\n====== 记忆库 (Memory Bank) ======\n\
+             【当前绝对时间】：{}（时区 {}）\n\
+             【时间解释规则】：‘今天/明天/下周’只能按其记录时的时间锚点解释；已过期计划是历史，不是当前待办。没有锚点的相对日期视为时间不确定，不得假装仍在未来。\n\
              【taの信息】：{}\n\
              【重要约定】：{}\n\
              【长期经历】：{}\n\
              =================================\n",
+            now.format("%Y-%m-%d %H:%M:%S"),
+            now.offset(),
             truncate_to_chars(&bank.data.user_info, limits.user_info),
             truncate_to_chars(&bank.data.promises, limits.promises),
             truncate_to_chars(&bank.data.long_term, limits.long_term),
@@ -619,9 +628,14 @@ impl PersistentMemorySystem {
             );
         }
 
+        let now = chrono::Local::now();
         let full_prompt = format!(
-            "{}\n\n【旧内容】：\n{}\n\n【新增对话】：\n{}\n\n【新内容】(直接输出结果，不要废话)：",
-            prompt_req, old, chat_text,
+            "{}\n\n【归档绝对时间】：{}（时区 {}）\n\n【旧内容】：\n{}\n\n【新增对话】：\n{}\n\n【新内容】(直接输出结果，不要废话)：",
+            prompt_req,
+            now.format("%Y-%m-%d %H:%M:%S"),
+            now.offset(),
+            old,
+            chat_text,
         );
 
         let messages = vec![LlmMessage::user(full_prompt)];
@@ -672,7 +686,16 @@ impl PersistentMemorySystem {
 
         let chat_text = chunks.join("\n");
         if !chat_text.is_empty() {
-            (format!("{}\n", chat_text), visible_count)
+            let now = chrono::Local::now();
+            (
+                format!(
+                    "[本批对话记录时间：{}，时区 {}。其中所有相对日期均以此时间锚点解释]\n{}\n",
+                    now.format("%Y-%m-%d %H:%M:%S"),
+                    now.offset(),
+                    chat_text
+                ),
+                visible_count,
+            )
         } else {
             (chat_text, visible_count)
         }
